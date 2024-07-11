@@ -181,13 +181,13 @@ def make_batch(samples, batch_size, feature_shape):
 def main():
     # make fake args
     args = argparse.Namespace()
-    args.dataset = "imagenet" #CIFAR-10 CIFAR-100    imagenet  pascal
+    args.dataset = "pascal" #CIFAR-10 CIFAR-100    imagenet  pascal
     args.model = "PIGNet_GSPonly_classification" #Resnet  PIGNet_GSPonly_classification  vit_b_16  swin
     args.backbone = "resnet101"
     args.workers = 4
     args.epochs = 50
     args.batch_size = 8
-    args.train = True
+    args.train = False
     args.crop_size = 513 #513
     args.base_lr = 0.007
     args.last_mult = 1.0
@@ -202,7 +202,7 @@ def main():
     args.embedding_size = 21
     args.n_layer = 8
     args.n_skip_l = 2
-    args.process_type = "zoom_out"
+    args.process_type = "overlap"  #zoom overlap
     # if is cuda available device
     if torch.cuda.is_available():
         args.device = 'cuda'
@@ -221,13 +221,17 @@ def main():
 
     if args.dataset == 'pascal':
         image_size = 513
-        dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/model/ADE/VOCdevkit',
+        dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
                                  train=args.train, crop_size=args.crop_size, process= None)
-        valid_dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/model/ADE/VOCdevkit',
+        valid_dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
                                         train=not (args.train), crop_size=args.crop_size, process= None)
-        process_valid_dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/model/ADE/VOCdevkit',
-                                        train=args.train,crop_size=args.crop_size, process= args.process_type)
 
+        zoom_factor = 0.5 # zoom in, out value 양수면 줌 음수면 줌아웃
+        overlap_percentage = 0.5
+        process_valid_dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
+                                        train=args.train,crop_size=args.crop_size, process= args.process_type,process_value = zoom_factor,overlap_percentage= overlap_percentage )
+        img, target = process_valid_dataset[0]
+        visualize_sample(img, target)
     elif args.dataset == 'imagenet':
         # 데이터셋 경로 및 변환 정의
         image_size=224
@@ -370,7 +374,8 @@ def main():
 
     print("train",args.train)
 
-
+    # Initialize a DataFrame to store the training log
+    train_log = pd.DataFrame(columns=["epoch", "train_loss", "train_accuracy"])
     if args.train:
         print("Training !!! ")
         criterion = nn.CrossEntropyLoss(ignore_index=255)
@@ -518,6 +523,8 @@ def main():
                   'loss: {2:.4f}'.format(
                 epoch + 1, lr,loss_avg))
 
+
+
             if best_loss > loss_avg:
                 best_loss = loss_avg
                 patience = 0
@@ -564,10 +571,16 @@ def main():
                 accuracy = 100 * correct / total
                 print('Accuracy: {:.2f}%'.format(accuracy))
 
+                train_log = train_log.append({"epoch": epoch, "train_loss":  losses_test / len(valid_dataset), "train_accuracy": accuracy},
+                                             ignore_index=True)
+
+
                 log['test/epoch/loss'] = losses_test / len(valid_dataset)
                 log['test/epoch/accuracy'] = accuracy
             # time.sleep(60)
             model.train()
+
+        train_log.to_csv("training_log.csv", index=False)
     else:
         print("Evaluating !! ")
 
@@ -600,18 +613,20 @@ def main():
                 _, predicted = outputs.max(1)
                 total += labels.size(0)
                 correct += predicted.eq(labels).sum().item()
+
+
                 #print("gsp_outputs",gsp_outputs)
                 # calculate the gsp_outputs output feature map
-                if i % 10 == 0 :
-                    count+=1
-                    result_similarity = []
-                    for idx, out in enumerate(gsp_outputs): #  gsp_output는 8개 layer + 오리지널 데이터 1 개
-                        tmp=compute_similarity(out,labels) #tmp 는 거리에 따른 4개의 output
-                        result_similarity.append(tmp)
-                    #result_similarity 는 8개가 생기는 임시 리스트
-                    for idx, data in enumerate(result_similarity): #result_similarity 의 길이는 8
-                        for idx_, data_ in enumerate(data): # model 는 4개의 길이가 있는
-                            pixel_similarity_value[idx][idx_] += data_
+                # if i % 10 == 0 :
+                #     count+=1
+                #     result_similarity = []
+                #     for idx, out in enumerate(gsp_outputs): #  gsp_output는 8개 layer + 오리지널 데이터 1 개
+                #         tmp=compute_similarity(out,labels) #tmp 는 거리에 따른 4개의 output
+                #         result_similarity.append(tmp)
+                #     #result_similarity 는 8개가 생기는 임시 리스트
+                #     for idx, data in enumerate(result_similarity): #result_similarity 의 길이는 8
+                #         for idx_, data_ in enumerate(data): # model 는 4개의 길이가 있는
+                #             pixel_similarity_value[idx][idx_] += data_
 
 
 
@@ -623,6 +638,20 @@ def main():
             print('Accuracy: {:.2f}%'.format(accuracy))
             print("mean of distance ",pixel_similarity_value)
 
+def visualize_sample(img, target):
+    """
+    Visualizes the image and its corresponding target mask.
+    """
+    fig, ax = plt.subplots(1, 2, figsize=(10, 5))
+    ax[0].imshow(img)
+    ax[0].set_title('Image')
+    ax[0].axis('off')
+
+    ax[1].imshow(target, cmap='gray')
+    ax[1].set_title('Target')
+    ax[1].axis('off')
+
+    plt.show()
 
 if __name__ == "__main__":
     main()
