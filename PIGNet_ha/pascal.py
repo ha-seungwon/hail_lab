@@ -5,6 +5,7 @@ import os
 from PIL import Image,ImageOps
 import numpy as np
 import scipy.ndimage as ndi
+import random
 
 
 
@@ -20,7 +21,7 @@ class VOCSegmentation(data.Dataset):
       'tv/monitor'
   ]
 
-  def __init__(self, root, train=True, transform=None, target_transform=None, download=False, crop_size=None,process=None,process_value=None,overlap_percentage=None):
+  def __init__(self, root, train=True, transform=None, target_transform=None, download=False, crop_size=None,process=None,process_value=None,overlap_percentage=None,pattern_repeat_count=None):
     self.root = root
     _voc_root = os.path.join(self.root, 'VOC2012')
     _list_dir = os.path.join(_voc_root, 'list')
@@ -31,7 +32,7 @@ class VOCSegmentation(data.Dataset):
     self.process = process
     self.process_value = process_value
     self.overlap_percentage = overlap_percentage
-
+    self.pattern_repeat_count = pattern_repeat_count
     if download:
       self.download()
 
@@ -73,6 +74,12 @@ class VOCSegmentation(data.Dataset):
       next_img=Image.open(self.images[index+1]).convert('RGB')
       next_target=Image.open(self.masks[index+1])
       _img, _target = self.overlap(_img, _target,next_img,next_target,self.overlap_percentage)
+
+
+    elif self.process == 'repeat':
+      _img, _target = self.repeat(_img, _target,self.pattern_repeat_count)
+
+
 
     if self.transform is not None:
       _img = self.transform(_img)
@@ -155,6 +162,48 @@ class VOCSegmentation(data.Dataset):
     result_mask = Image.fromarray(canvas_mask)
 
     return result_image, result_mask
+
+  def repeat(self,image, mask, pattern_repeat_count):
+    image_size = image.size
+    numpy_image = np.array(image)
+    original_opencv_image = cv2.cvtColor(numpy_image, cv2.COLOR_RGB2BGR)
+
+    contour1 = self.find_contours(mask)
+    if len(contour1) != 1:
+      return None, None  # If contours are not exactly one, skip processing
+
+    inner_region1 = self.extract_inner_region(original_opencv_image, contour1[0])
+    inner_image1 = Image.fromarray(cv2.cvtColor(inner_region1, cv2.COLOR_BGR2RGB))
+    inner_image1_resize = inner_image1.resize(
+      (image_size[0], image_size[1])
+    )
+
+    numpy_mask = np.array(mask)
+    original_opencv_mask = cv2.cvtColor(numpy_mask, cv2.COLOR_GRAY2BGR)
+    inner_mask1 = self.extract_inner_region(original_opencv_mask, contour1[0])
+    inner_mask1_resize = Image.fromarray(cv2.cvtColor(inner_mask1, cv2.COLOR_BGR2GRAY)).resize(
+      (image_size[0], image_size[1])
+    )
+
+    # Create empty new images and masks of the same size as the original image
+    new_image_size = (image_size[0] * pattern_repeat_count, image_size[1] * pattern_repeat_count)
+    new_image = Image.new('RGB', new_image_size)
+    new_mask = Image.new('L', new_image_size)
+
+    # Paste the original image and mask in a grid pattern
+    for i in range(pattern_repeat_count):
+      for j in range(pattern_repeat_count):
+        new_image.paste(inner_image1_resize, (i * image_size[0], j * image_size[1]))
+        new_mask.paste(inner_mask1_resize, (i * image_size[0], j * image_size[1]))
+
+    # Resize the final images to the original image size
+    final_image = new_image.resize(image_size)
+    final_mask = new_mask.resize(image_size)
+
+    return final_image, final_mask
+
+
+
 
   def zoom_center(self, image, mask, zoom_factor):
     """

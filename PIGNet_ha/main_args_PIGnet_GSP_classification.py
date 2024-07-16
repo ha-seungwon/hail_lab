@@ -202,7 +202,7 @@ def main():
     args.embedding_size = 21
     args.n_layer = 8
     args.n_skip_l = 2
-    args.process_type = "overlap"  #zoom overlap
+    args.process_type = "repeat"  #zoom overlap repeat
     # if is cuda available device
     if torch.cuda.is_available():
         args.device = 'cuda'
@@ -227,10 +227,10 @@ def main():
                                         train=not (args.train), crop_size=args.crop_size, process= None)
 
         zoom_factor = 0.5 # zoom in, out value 양수면 줌 음수면 줌아웃
-        overlap_percentage = 0.7
-        pattern_repeat_count = 10
+        overlap_percentage = 0.3
+        pattern_repeat_count = 3
         process_valid_dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
-                                        train=args.train,crop_size=args.crop_size, process= args.process_type,process_value = zoom_factor,overlap_percentage= overlap_percentage )
+                                        train=args.train,crop_size=args.crop_size, process= args.process_type,process_value = zoom_factor,overlap_percentage= overlap_percentage,pattern_repeat_count=pattern_repeat_count)
         for i in range(len(process_valid_dataset)):
             img, target = process_valid_dataset[i]
             if img ==None or target ==None:
