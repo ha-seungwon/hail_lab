@@ -2,7 +2,7 @@ from __future__ import print_function
 import cv2
 import torch.utils.data as data
 import os
-from PIL import Image
+from PIL import Image,ImageOps
 import numpy as np
 import scipy.ndimage as ndi
 
@@ -90,32 +90,69 @@ class VOCSegmentation(data.Dataset):
   def download(self):
     raise NotImplementedError('Automatic download not yet implemented.')
 
+  def find_contours(self, mask):
+    mask_array = np.array(mask)
+    _, binary_mask = cv2.threshold(mask_array, 128, 255, cv2.THRESH_BINARY)
+    contours, _ = cv2.findContours(binary_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    return contours
+
+  def extract_inner_region(self, image, contour):
+    mask = np.zeros_like(image)
+    cv2.drawContours(mask, [contour], -1, (255, 255, 255), thickness=cv2.FILLED)
+    result = cv2.bitwise_and(image, mask)
+    return result
+
   def overlap(self, image, mask, next_image, next_mask, overlap_percentage=0.5):
-    # 이미지의 크기 가져오기
-    width1, height1 = image.size
-    width2, height2 = next_image.size
+    numpy_image = np.array(image)
+    original_opencv_image = cv2.cvtColor(numpy_image, cv2.COLOR_RGB2BGR)
 
-    # 겹칠 영역 계산
-    overlap_width = int(width2 * overlap_percentage)
-    overlap_height = int(height2 * overlap_percentage)
+    next_numpy_image = np.array(next_image)
+    next_original_opencv_image = cv2.cvtColor(next_numpy_image, cv2.COLOR_RGB2BGR)
 
-    # 큰 이미지를 생성하고 첫 번째 이미지를 왼쪽 위에 배치
-    result_image = Image.new('RGB', (width1+width2, height1+height2))
-    result_mask = Image.new('L', (width1+width2, height1+height2))
+    contour1 = self.find_contours(mask)
+    if len(contour1) != 1:
+      return None,None  # If contours are not exactly one, skip processing
 
-    result_image.paste(image, (0, 0))
-    result_mask.paste(mask, (0, 0))
+    inner_region1 = self.extract_inner_region(original_opencv_image, contour1[0])
+    inner_image1 = Image.fromarray(cv2.cvtColor(inner_region1, cv2.COLOR_BGR2RGB))
 
-    # 두 번째 이미지를 오른쪽 아래에 배치
-    offset_x = width1 - overlap_width
-    offset_y = height1 - overlap_height
+    contour2 = self.find_contours(next_mask)
+    if len(contour2) != 1:
+      return None,None  # If contours are not exactly one, skip processing
 
-    result_image.paste(next_image, (offset_x, offset_y))
-    result_mask.paste(next_mask, (offset_x, offset_y))
+    inner_region2 = self.extract_inner_region(next_original_opencv_image, contour2[0])
+    inner_image2 = Image.fromarray(cv2.cvtColor(inner_region2, cv2.COLOR_BGR2RGB))
 
-    # 결과 이미지와 마스크를 원래 이미지 크기로 줄이기
-    result_image = result_image.crop((0,0,width1, height1))
-    result_mask = result_mask.crop((0,0,width1, height1))
+
+    inner_image1_np = np.array(inner_image1)
+    inner_image2_np = np.array(inner_image2)
+    inner_mask1_np = np.array(mask)
+    inner_mask2_np = np.array(next_mask)
+
+    # Calculate overlap width
+    overlap_width = int(inner_image1_np.shape[1] * overlap_percentage)
+
+    # Create a canvas to overlay both images
+    canvas_width = inner_image1_np.shape[1] + inner_image2_np.shape[1] - overlap_width
+    canvas_height = max(inner_image1_np.shape[0], inner_image2_np.shape[0])
+    canvas_image = np.zeros((canvas_height, canvas_width, 3), dtype=np.uint8)
+    canvas_mask = np.zeros((canvas_height, canvas_width), dtype=np.uint8)
+
+    # Place the first image and mask on the canvas
+    canvas_image[:inner_image1_np.shape[0], :inner_image1_np.shape[1]] = inner_image1_np
+    canvas_mask[:inner_mask1_np.shape[0], :inner_mask1_np.shape[1]] = inner_mask1_np
+
+    # Overlay the second image and mask on the canvas with overlap
+    start_x = inner_image1_np.shape[1] - overlap_width
+    for i in range(inner_image2_np.shape[0]):
+      for j in range(inner_image2_np.shape[1]):
+        if canvas_mask[i, start_x + j] == 0:
+          canvas_image[i, start_x + j] = inner_image2_np[i, j]
+          canvas_mask[i, start_x + j] = inner_mask2_np[i, j]
+
+    # Convert the canvas back to an image and mask
+    result_image = Image.fromarray(cv2.cvtColor(canvas_image, cv2.COLOR_BGR2RGB))
+    result_mask = Image.fromarray(canvas_mask)
 
     return result_image, result_mask
 

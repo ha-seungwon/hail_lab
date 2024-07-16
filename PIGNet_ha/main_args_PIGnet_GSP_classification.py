@@ -227,11 +227,14 @@ def main():
                                         train=not (args.train), crop_size=args.crop_size, process= None)
 
         zoom_factor = 0.5 # zoom in, out value 양수면 줌 음수면 줌아웃
-        overlap_percentage = 0.5
+        overlap_percentage = 0.7
+        pattern_repeat_count = 10
         process_valid_dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
                                         train=args.train,crop_size=args.crop_size, process= args.process_type,process_value = zoom_factor,overlap_percentage= overlap_percentage )
-        img, target = process_valid_dataset[0]
-        visualize_sample(img, target)
+        for i in range(len(process_valid_dataset)):
+            img, target = process_valid_dataset[i]
+            if img ==None or target ==None:
+                continue
     elif args.dataset == 'imagenet':
         # 데이터셋 경로 및 변환 정의
         image_size=224
@@ -375,7 +378,7 @@ def main():
     print("train",args.train)
 
     # Initialize a DataFrame to store the training log
-    train_log = pd.DataFrame(columns=["epoch", "train_loss", "train_accuracy"])
+    #train_log = pd.DataFrame(columns=["epoch", "train_loss", "train_accuracy"])
     if args.train:
         print("Training !!! ")
         criterion = nn.CrossEntropyLoss(ignore_index=255)
@@ -571,8 +574,8 @@ def main():
                 accuracy = 100 * correct / total
                 print('Accuracy: {:.2f}%'.format(accuracy))
 
-                train_log = train_log.append({"epoch": epoch, "train_loss":  losses_test / len(valid_dataset), "train_accuracy": accuracy},
-                                             ignore_index=True)
+                # train_log = train_log.append({"epoch": epoch, "train_loss":  losses_test / len(valid_dataset), "train_accuracy": accuracy},
+                #                              ignore_index=True)
 
 
                 log['test/epoch/loss'] = losses_test / len(valid_dataset)
@@ -580,7 +583,7 @@ def main():
             # time.sleep(60)
             model.train()
 
-        train_log.to_csv("training_log.csv", index=False)
+        # train_log.to_csv("training_log.csv", index=False)
     else:
         print("Evaluating !! ")
 
