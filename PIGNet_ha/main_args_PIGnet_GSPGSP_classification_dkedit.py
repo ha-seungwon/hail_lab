@@ -17,7 +17,7 @@ import swin
 
 print("Current directory:", os.getcwd())
 
-import Classification_resnet, PIGNet_GSPonly_classification
+import Classification_resnet, PIGNet_GSPonly_classification, PIGNet_GSPGSP_classification
 
 import torch.nn.functional as F
 
@@ -35,6 +35,7 @@ def make_batch_fn(samples, batch_size, feature_shape):
 import subprocess
 from torch.nn.functional import cosine_similarity
 import matplotlib.pyplot as plt
+import wandb
 
 
 def visualize_compared_features(compared_features):
@@ -181,13 +182,13 @@ def make_batch(samples, batch_size, feature_shape):
 def main():
     # make fake args
     args = argparse.Namespace()
-    args.dataset = "pascal" #CIFAR-10 CIFAR-100    imagenet  pascal
-    args.model = "PIGNet_GSPonly_classification" #Resnet  PIGNet_GSPonly_classification  vit_b_16  swin
-    args.backbone = "resnet101"
+    args.dataset = "CIFAR-100" #CIFAR-10 CIFAR-100    imagenet  pascal
+    args.model = "PIGNet_GSPGSP_classification" #Resnet  PIGNet_GSPonly_classification  vit_b_16  swin
+    args.backbone = "resnet50"
     args.workers = 4
     args.epochs = 50
     args.batch_size = 8
-    args.train = False
+    args.train = True
     args.crop_size = 513 #513
     args.base_lr = 0.007
     args.last_mult = 1.0
@@ -199,8 +200,8 @@ def main():
     args.resume = None
     args.exp = "bn_lr7e-3"
     args.gpu = 0
-    args.embedding_size = 21
-    args.n_layer = 8
+    args.embedding_size = 512
+    args.n_layer = 6
     args.n_skip_l = 2
     args.process_type = "repeat"  #zoom overlap repeat
     # if is cuda available device
@@ -209,6 +210,8 @@ def main():
     else:
         args.device = 'cpu'
 
+    wandb.init(project='pignet_classification', name=args.model+'_'+args.backbone+ '_embed' + str(args.embedding_size) +'_nlayer' + str(args.n_layer) + '_'+args.exp,
+               config=args.__dict__)
 
     loss_data = pd.DataFrame(columns=["train_loss"])
     loss_list = []
@@ -343,6 +346,17 @@ def main():
                 n_layer = args.n_layer,
                 n_skip_l = args.n_skip_l)
             print("model PIGNet_GSPonly_classification")
+        elif args.model == "PIGNet_GSPGSP_classification":
+            model = getattr(PIGNet_GSPGSP_classification, args.backbone)(
+                pretrained=(not args.scratch),
+                num_classes=len(dataset.CLASSES),
+                num_groups=args.groups,
+                weight_std=args.weight_std,
+                beta=args.beta,
+                embedding_size = args.embedding_size,
+                n_layer = args.n_layer,
+                n_skip_l = args.n_skip_l)
+            print("model PIGNet_GSPonly_classification")
         elif args.model == "Resnet":
             print("Classification_resnet model load")
             model = getattr(Classification_resnet, args.backbone)(
@@ -369,8 +383,9 @@ def main():
     # print number of parameters
     print(f"Number of parameters: {num_params / (1000.0 ** 2): .3f} M")
 
-    #num_params_gnn = sum(p.numel() for p in model.pyramid_gnn.parameters() if p.requires_grad)
-    #print(f"Number of GNN parameters: {num_params_gnn / (1000.0 ** 2): .3f} M")
+    num_params_gnn = sum(p.numel() for p in model.pyramid_gnn1.parameters() if p.requires_grad) + sum(
+        p.numel() for p in model.pyramid_gnn2.parameters() if p.requires_grad)
+    print(f"Number of GNN parameters: {num_params_gnn / (1000.0 ** 2): .3f} M")
 
 
     print(f"Entire model size: {size_in_bytes / (1024.0 ** 3): .3f} GB")
@@ -407,6 +422,14 @@ def main():
                     {'params': filter(lambda p: p.requires_grad, last_params)}
 
                 ],lr=args.base_lr, momentum=0.9, weight_decay=0.0001)
+            elif args.model == "PIGNet_GSPGSP_classification":
+                last_params = list(model.module.pyramid_gnn1.parameters()) + list(model.module.pyramid_gnn2.parameters())
+                optimizer = optim.SGD([
+                    {'params': filter(lambda p: p.requires_grad, backbone_params)},
+                    {'params': filter(lambda p: p.requires_grad, last_params)}
+
+                ],lr=args.base_lr, momentum=0.9, weight_decay=0.0001)
+
             elif args.model == "ASPP":
                 last_params = list(model.module.aspp.parameters())
                 optimizer = optim.SGD([
@@ -473,6 +496,7 @@ def main():
             print("EPOCHS : ", epoch+1," / ",args.epochs)
 
             loss_sum = 0
+            acc_sum = 0
             cnt = 0
 
             for inputs, target in tqdm(iter(dataset_loader)):
@@ -502,8 +526,17 @@ def main():
                 loss.backward()
                 #print('batch_loss: {:.5f}'.format(loss))
 
+                # calculate accuracy
+                _, predicted = outputs.max(1)
+                total = target.size(0)
+                correct = predicted.eq(target).sum().item()
+                accuracy = 100 * correct / total
+                acc_sum += accuracy
+                log['train/batch/accuracy'] = accuracy
                 log['train/batch/loss'] = loss.to('cpu')
                 # log['train/temp'] = get_cpu_temperature()
+                wandb.log(log)
+
 
                 cnt+=1
                 train_step += 1
@@ -514,9 +547,13 @@ def main():
                 # if train_step % 30 == 0:
                 #     time.sleep(15)
 
+            log = {}
             loss_avg = loss_sum/len(dataset_loader)
+            acc_avg = acc_sum/len(dataset_loader)
             log['train/epoch/loss'] = loss_avg
+            log['train/epoch/accuracy'] = acc_avg
 
+            wandb.log(log)
 
 
 
@@ -580,6 +617,8 @@ def main():
 
                 log['test/epoch/loss'] = losses_test / len(valid_dataset)
                 log['test/epoch/accuracy'] = accuracy
+
+            wandb.log(log)
             # time.sleep(60)
             model.train()
 

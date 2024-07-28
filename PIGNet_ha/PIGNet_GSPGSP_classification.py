@@ -402,14 +402,19 @@ class ResNet(nn.Module):
         self.layer3 = self._make_layer(block, 256, layers[2], stride=1)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=1,dilation=2)
         # remove require_grad for self.layer4
+        for param in self.layer3.parameters():
+            param.requires_grad = False
         for param in self.layer4.parameters():
             param.requires_grad = False
 
+
         # self.pyramid_gnn = GSP(num_classes, 256 * block.expansion, self.embedding_size, self.n_layer, n_skip_l = self.n_skip_l) # 512 * block.expansion for pascal
-        self.pyramid_gnn = GSP(num_classes, 256 * block.expansion, self.embedding_size, self.n_layer, n_skip_l = self.n_skip_l) # 512 * block.expansion for pascal
+        self.pyramid_gnn1 = GSP(num_classes, 128 * block.expansion, self.embedding_size, self.n_layer, n_skip_l = self.n_skip_l) # 512 * block.expansion for pascal
+        self.pyramid_gnn2 = GSP(num_classes, 128 * block.expansion, self.embedding_size//2, self.n_layer, n_skip_l = self.n_skip_l) # 512 * block.expansion for pascal
+
         #num_classes, depth, embedding_size, n_layer, norm=nn.BatchNorm2d, n_skip_l =
         self.global_avg_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.FC = nn.Linear(self.embedding_size, num_classes)
+        self.FC = nn.Linear(self.embedding_size//2, num_classes)
 
 
         # self.upsample = nn.Conv2d(in_channels=num_classes, out_channels=num_classes, kernel_size=2, stride=1, padding=1,dilation=2)
@@ -448,11 +453,12 @@ class ResNet(nn.Module):
 
         x = self.layer1(x) #block1
         x = self.layer2(x) #block2
-        x = self.layer3(x) #block3
+        # x = self.layer3(x) #block3
         #x = self.layer4(x) #block4
 
 
-        x, gsp_outputs = self.pyramid_gnn(x)
+        x, gsp_outputs = self.pyramid_gnn1(x)
+        x, gsp_outputs = self.pyramid_gnn2(x)
 
 
         x= self.global_avg_pool(x)
