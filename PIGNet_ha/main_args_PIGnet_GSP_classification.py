@@ -1,23 +1,20 @@
 import argparse
-import os
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import pdb
+from scipy.spatial.distance import cosine
 from torch.autograd import Variable
 from tqdm.auto import tqdm
-from torchvision import transforms
 from torch.utils.data import RandomSampler
 import pandas as pd
 import os
-from torchvision import transforms, models
-
-import swin
+from torchvision import transforms
 
 print("Current directory:", os.getcwd())
 
-import Classification_resnet, PIGNet_GSPonly_classification, PIGNet_GSPGSP_classification
+from model_src import Classification_resnet, PIGNet_GSPonly_classification, swin
 
 import torch.nn.functional as F
 
@@ -182,9 +179,9 @@ def make_batch(samples, batch_size, feature_shape):
 def main():
     # make fake args
     args = argparse.Namespace()
-    args.dataset = "CIFAR-100" #CIFAR-10 CIFAR-100    imagenet  pascal
-    args.model = "PIGNet_GSPGSP_classification" #Resnet  PIGNet_GSPonly_classification  vit_b_16  swin
-    args.backbone = "resnet50"
+    args.dataset = "imagenet" #CIFAR-10 CIFAR-100    imagenet  pascal
+    args.model = "Resnet" #Resnet  PIGNet_GSPonly_classification  vit_b_16  swin
+    args.backbone = "resnet101"
     args.workers = 4
     args.epochs = 50
     args.batch_size = 8
@@ -211,7 +208,7 @@ def main():
         args.device = 'cpu'
 
     wandb.init(project='pignet_classification', name=args.model+'_'+args.backbone+ '_embed' + str(args.embedding_size) +'_nlayer' + str(args.n_layer) + '_'+args.exp,
-               config=args.__dict__)
+                config=args.__dict__)
 
     loss_data = pd.DataFrame(columns=["train_loss"])
     loss_list = []
@@ -346,17 +343,6 @@ def main():
                 n_layer = args.n_layer,
                 n_skip_l = args.n_skip_l)
             print("model PIGNet_GSPonly_classification")
-        elif args.model == "PIGNet_GSPGSP_classification":
-            model = getattr(PIGNet_GSPGSP_classification, args.backbone)(
-                pretrained=(not args.scratch),
-                num_classes=len(dataset.CLASSES),
-                num_groups=args.groups,
-                weight_std=args.weight_std,
-                beta=args.beta,
-                embedding_size = args.embedding_size,
-                n_layer = args.n_layer,
-                n_skip_l = args.n_skip_l)
-            print("model PIGNet_GSPonly_classification")
         elif args.model == "Resnet":
             print("Classification_resnet model load")
             model = getattr(Classification_resnet, args.backbone)(
@@ -372,7 +358,7 @@ def main():
         elif args.model == 'vit_b_16':
             print("main")
         elif args.model == 'swin':
-            model = swin.SwinTransformer(img_size=image_size,num_classes=len(dataset.CLASSES),window_size=4) #window_size =4 cifar   img_size=
+            model = swin.SwinTransformer(img_size=image_size, num_classes=len(dataset.CLASSES), window_size=4) #window_size =4 cifar   img_size=
 
     else:
 
@@ -383,9 +369,8 @@ def main():
     # print number of parameters
     print(f"Number of parameters: {num_params / (1000.0 ** 2): .3f} M")
 
-    num_params_gnn = sum(p.numel() for p in model.pyramid_gnn1.parameters() if p.requires_grad) + sum(
-        p.numel() for p in model.pyramid_gnn2.parameters() if p.requires_grad)
-    print(f"Number of GNN parameters: {num_params_gnn / (1000.0 ** 2): .3f} M")
+    # num_params_gnn = sum(p.numel() for p in model.pyramid_gnn.parameters() if p.requires_grad)
+    # print(f"Number of GNN parameters: {num_params_gnn / (1000.0 ** 2): .3f} M")
 
 
     print(f"Entire model size: {size_in_bytes / (1024.0 ** 3): .3f} GB")
@@ -422,14 +407,6 @@ def main():
                     {'params': filter(lambda p: p.requires_grad, last_params)}
 
                 ],lr=args.base_lr, momentum=0.9, weight_decay=0.0001)
-            elif args.model == "PIGNet_GSPGSP_classification":
-                last_params = list(model.module.pyramid_gnn1.parameters()) + list(model.module.pyramid_gnn2.parameters())
-                optimizer = optim.SGD([
-                    {'params': filter(lambda p: p.requires_grad, backbone_params)},
-                    {'params': filter(lambda p: p.requires_grad, last_params)}
-
-                ],lr=args.base_lr, momentum=0.9, weight_decay=0.0001)
-
             elif args.model == "ASPP":
                 last_params = list(model.module.aspp.parameters())
                 optimizer = optim.SGD([
@@ -534,7 +511,7 @@ def main():
                 acc_sum += accuracy
                 log['train/batch/accuracy'] = accuracy
                 log['train/batch/loss'] = loss.to('cpu')
-                # log['train/temp'] = get_cpu_temperature()
+                #log['train/temp'] = get_cpu_temperature()
                 wandb.log(log)
 
 
@@ -651,8 +628,12 @@ def main():
             for i, (inputs, labels) in enumerate(tqdm(valid_dataset)):
                 inputs = inputs.to(args.device)
                 labels = torch.tensor(labels).to(args.device)
-                outputs, gsp_outputs = model(inputs)
+                outputs, layer_outputs = model(inputs)
                 _, predicted = outputs.max(1)
+
+                radii=[1,2,4,6]
+                plot_cosine_similarity(layer_outputs[0], radii)
+
                 total += labels.size(0)
                 correct += predicted.eq(labels).sum().item()
 
@@ -694,6 +675,43 @@ def visualize_sample(img, target):
     ax[1].axis('off')
 
     plt.show()
+
+
+def get_cosine_similarity(feature_map, center, radius):
+    """Calculate the average cosine similarity within a given radius from the center."""
+    channels = feature_map.shape[0]
+    height, width = feature_map.shape[1:]
+    center_y, center_x = center
+
+    similarities = []
+    center_vector = feature_map[:, center_y, center_x].reshape(-1)
+
+    for y in range(height):
+        for x in range(width):
+            if np.sqrt((y - center_y) ** 2 + (x - center_x) ** 2) <= radius:
+                vec = feature_map[:, y, x].reshape(-1)
+                similarity = 1 - cosine(center_vector.cpu(), vec.cpu())
+                similarities.append(similarity)
+
+    return np.mean(similarities) if similarities else 0
+
+
+def plot_cosine_similarity(feature_map, radii):
+    center = (feature_map.shape[1] // 2, feature_map.shape[2] // 2)
+    similarities = []
+
+    for radius in radii:
+        avg_similarity = get_cosine_similarity(feature_map, center, radius)
+        similarities.append(avg_similarity)
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(radii, similarities, marker='o')
+    plt.xlabel('Radius')
+    plt.ylabel('Average Cosine Similarity')
+    plt.title('Cosine Similarity vs. Radius')
+    plt.grid(True)
+    plt.show()
+
 
 if __name__ == "__main__":
     main()

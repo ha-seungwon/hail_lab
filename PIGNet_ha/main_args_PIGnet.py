@@ -12,7 +12,7 @@ from tqdm.auto import tqdm
 from torch.utils.data import RandomSampler
 import pandas as pd
 import wandb
-from PIGNet.models import PIGNet
+from PIGNet_ha.model_src import PIGNet
 
 from pascal import VOCSegmentation
 from utils import AverageMeter, inter_and_union
