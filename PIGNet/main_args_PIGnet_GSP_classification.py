@@ -1,6 +1,4 @@
 import argparse
-import os
-from PIL import Image
 import numpy as np
 import torch
 import torch.nn as nn
@@ -9,23 +7,20 @@ import pdb
 from scipy.spatial.distance import cosine
 from torch.autograd import Variable
 from tqdm.auto import tqdm
-from torchvision import transforms
 from torch.utils.data import RandomSampler
 import pandas as pd
 import os
-from torchvision import transforms, models
+from torchvision import transforms
 
-import swin
+from PIGNet.model_code import swin, Classification_resnet, PIGNet_GSPonly_classification
 
 print("Current directory:", os.getcwd())
-
-import Classification_resnet, PIGNet_GSPonly_classification
 
 import torch.nn.functional as F
 
 
-from pascal import VOCSegmentation
-from utils import AverageMeter
+from PIGNet.pascal import VOCSegmentation
+from PIGNet.utils import AverageMeter
 
 from functools import partial
 import torchvision
@@ -185,12 +180,12 @@ def main():
     # make fake args
     args = argparse.Namespace()
     args.dataset = "imagenet" #CIFAR-10 CIFAR-100    imagenet  pascal
-    args.model = "PIGNet_GSPonly_classification" #Resnet  PIGNet_GSPonly_classification  vit_b_16  swin
+    args.model = "Resnet" #Resnet  PIGNet_GSPonly_classification  vit_b_16  swin
     args.backbone = "resnet101"
     args.workers = 4
     args.epochs = 50
     args.batch_size = 8
-    args.train = True
+    args.train = False
     args.crop_size = 513 #513
     args.base_lr = 0.007
     args.last_mult = 1.0
@@ -363,7 +358,7 @@ def main():
         elif args.model == 'vit_b_16':
             print("main")
         elif args.model == 'swin':
-            model = swin.SwinTransformer(img_size=image_size,num_classes=len(dataset.CLASSES),window_size=4) #window_size =4 cifar   img_size=
+            model = swin.SwinTransformer(img_size=image_size, num_classes=len(dataset.CLASSES), window_size=4) #window_size =4 cifar   img_size=
 
     else:
 

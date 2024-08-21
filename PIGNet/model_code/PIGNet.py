@@ -21,7 +21,9 @@ model_urls = {
 def model_size(model):
     total_size = 0
     for param in model.parameters():
+        # °¢ ÆÄ¶ó¹ÌÅÍÀÇ ¿ø¼Ò °³¼ö °è»ê
         num_elements = torch.prod(torch.tensor(param.size())).item()
+        # ¿ø¼Ò Å¸ÀÔ º°·Î ¹ÙÀÌÆ® Å©±â °è»ê (¿¹: float32 -> 4 bytes)
         num_bytes = num_elements * param.element_size()
         total_size += num_bytes
     return total_size
@@ -173,6 +175,145 @@ class SPP(nn.Module):
         return [x1, x2, x3, x5]
 
 
+class GSP(nn.Module):
+    def __init__(self,num_classes, depth, embedding_size, n_layer, norm=nn.BatchNorm2d, n_skip_l = 1):
+        # PyramidGNN(num_classes, 512 * block.expansion, self.embedding_size, self.n_layer, n_skip_l = self.n_skip_l)
+        super(GSP, self).__init__()
+        mult = 1
+        momentum = 0.0003
+        conv = nn.Conv2d
+        self.depth = depth
+        self.embedding_size = embedding_size
+        self.encoder = SPP(2048, self.embedding_size, conv, norm, momentum, mult)
+        self.n_skip_l = n_skip_l
+
+        self.gelu = nn.GELU()
+
+        n_layers = n_layer
+
+        # self.convg = conv(depth, embedding_size, kernel_size=1, stride=1)
+        # self.convg_bn = norm(embedding_size, momentum)
+
+        # hidden_size = np.linspace(2048, num_classes, n_layers+1).astype(np.int16)
+        hidden_size = [self.embedding_size]
+        for i in range(n_layers):
+            hidden_size.append(self.embedding_size)
+
+        self.gn_layers = nn.ModuleList()
+        for i in range(n_layers):
+            self.gn_layers.append(blockSAGEsq(hidden_size[i], hidden_size[i+1]))
+
+
+
+        self.edge_index = None
+        self.graph_data = None
+        self.grid_size = 33
+
+        self.gelu = nn.GELU()
+
+        # self.convx = nn.Conv2d(512*6,2048,kernel_size=1,stride=1)
+
+        input_conv =  self.embedding_size*(n_layers//self.n_skip_l + 4)
+
+        self.conv2 = nn.Conv2d(input_conv,num_classes, kernel_size=1, stride=1)
+
+        #self.bn3 = nn.BatchNorm2d(128, momentum=0.0003)
+        #self.conv4 = nn.Conv2d(128,num_classes, kernel_size=1, stride=1)
+
+        #self.upsampling = nn.ConvTranspose2d(num_classes,num_classes,kernel_size=2,stride=3,dilation=2)
+
+    def edge(self, grid_size):
+        edge_index = []
+
+        for i in range(grid_size):
+            for j in range(grid_size):
+                current = i * grid_size + j
+                # Connect with right neighbor
+                if j < grid_size - 1:
+                    edge_index.append([current, current + 1])
+                # Connect with bottom neighbor
+                if i < grid_size - 1:
+                    edge_index.append([current, current + grid_size])
+                if j < grid_size - 1 and i < grid_size - 1:
+                    edge_index.append([current, current + grid_size + 1])
+                # Connect with bottom-left neighbor (diagonal)
+                if j > 0 and i < grid_size - 1:
+                    edge_index.append([current, current + grid_size - 1])
+        edge_idx = torch.tensor(edge_index, dtype=torch.long).t().contiguous().cuda()
+        return edge_idx
+    def feature2graph(self,feature_map,edge_index):
+
+        batch_size, channels, height, width = feature_map.shape
+
+        # list to store graph model for each item in the batch
+        data_list = []
+
+        # iterate through the batch
+        for i in range(batch_size):
+            # extracting the feature_map for this item in the batch
+            single_map = feature_map[i]
+
+            # reshaping (100, 3, 3) to (9, 100)
+            x = single_map.view(channels, height * width).permute(1, 0)  # x has shape [9, 100]
+
+            # constructing edge_index (in this example, making fully connected graph for simplicity)
+
+            # create Data instance for this item in the batch
+            data = Data(x=x, edge_index=edge_index)
+
+            # appending the model to the data_list
+            data_list.append(data)
+
+        # create a batch from the data_list
+        batch = Batch.from_data_list(data_list)
+
+        return batch
+    def graph2feature(self, graph, num_nodes, feature_shape=(512, 11, 11)):
+        batch_size = graph.size(0) // num_nodes
+
+        # list to store feature maps for each item in the batch
+        feature_maps = []
+
+        # iterate through the batch
+        for i in range(batch_size):
+            # extracting the tensor for this item in the batch
+            single_tensor = graph[i * num_nodes: (i + 1) * num_nodes]
+
+
+            # reshaping (num_nodes, 100) to (256, 3, 3)
+            single_map = single_tensor.view(*feature_shape)  # single_map has shape [256, 3, 3]
+
+            # appending the feature map to the feature_maps list
+            feature_maps.append(single_map)
+
+        # stack all feature maps to a single tensor
+        feature_maps = torch.stack(feature_maps)
+
+        return feature_maps
+    def forward(self, x):
+        # Encoder
+        x_origin = x
+
+        x_s_f = self.encoder(x)
+
+        edge_idx = self.edge(self.grid_size)
+        x = self.feature2graph(x_s_f[0],edge_idx)
+
+        x = x.x
+
+        
+        for ii in range(len(self.gn_layers)):
+            x, edge = self.gn_layers[ii](x, edge_idx)
+            if (ii+1) % self.n_skip_l ==0:
+                x_s_f.append(self.graph2feature(x, num_nodes=(self.grid_size ** 2),
+                                               feature_shape=(self.embedding_size, 33, 33)))
+
+        output = torch.cat(x_s_f, dim=1)
+
+        # Output
+        x = self.conv2(output)
+
+        return x
 
 class Bottleneck(nn.Module):
     expansion = 4
@@ -250,11 +391,8 @@ class ResNet(nn.Module):
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=1,dilation=2)
-
-        self.cnn_layer = nn.Conv2d(2048,100,stride=1,kernel_size=1)
-        self.global_avg_pool = nn.AdaptiveAvgPool2d((1,1))
-        self.linear = nn.Linear(2048,num_classes)
-
+        print("!!!!!!!!!!!!!!!!",num_classes, block.expansion, self.embedding_size, self.n_layer,self.n_skip_l)
+        self.pyramid_gnn = GSP(num_classes, 512 * block.expansion, self.embedding_size, self.n_layer, n_skip_l = self.n_skip_l)
         # self.upsample = nn.Conv2d(in_channels=num_classes, out_channels=num_classes, kernel_size=2, stride=1, padding=1,dilation=2)
 
         for m in self.modules():
@@ -283,7 +421,6 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        layer_outputs=[]
         size = (x.shape[2], x.shape[3])
 
         x = self.conv1(x)
@@ -292,23 +429,16 @@ class ResNet(nn.Module):
         x = self.maxpool(x)
 
         x = self.layer1(x) #block1
-        #layer_outputs.append(x)
         x = self.layer2(x) #block2
-        #layer_outputs.append(x)
         x = self.layer3(x) #block3
-        #layer_outputs.append(x)
         x = self.layer4(x) #block4
-        layer_outputs= x
 
-        #print("backbone output ",x.size())
-        x = self.global_avg_pool(x)
-        #print("pooling output ", x.size())
-        x=x.view(x.size(0), -1)
-        #print("x output ", x.size())
-        x = self.linear(x)
-        # for idx,model in enumerate(layer_outputs):
-        #     print(f"{idx} model {model.size()}")
-        return x,layer_outputs
+        x = self.pyramid_gnn(x)
+
+        x = nn.Upsample(size, mode='bilinear', align_corners=True)(x)
+
+
+        return x
 
 
 
@@ -333,7 +463,7 @@ def resnet50(pretrained=False, num_groups=None, weight_std=False, **kwargs):
             overlap_dict = {k[7:]: v for k, v in pretrained_dict.items() if k[7:] in model_dict}
             assert len(overlap_dict) == 312
         elif not num_groups and not weight_std:
-            print("2")
+            #print("2")
             pretrained_dict = model_zoo.load_url(model_urls['resnet50'])
             overlap_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
         else:

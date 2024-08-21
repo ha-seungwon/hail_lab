@@ -21,7 +21,9 @@ model_urls = {
 def model_size(model):
     total_size = 0
     for param in model.parameters():
+        # °¢ ÆÄ¶ó¹ÌÅÍÀÇ ¿ø¼Ò °³¼ö °è»ê
         num_elements = torch.prod(torch.tensor(param.size())).item()
+        # ¿ø¼Ò Å¸ÀÔ º°·Î ¹ÙÀÌÆ® Å©±â °è»ê (¿¹: float32 -> 4 bytes)
         num_bytes = num_elements * param.element_size()
         total_size += num_bytes
     return total_size
@@ -250,10 +252,8 @@ class ResNet(nn.Module):
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=1,dilation=2)
+        self.aspp = ASPP(2048,[12, 24, 36])
 
-        self.cnn_layer = nn.Conv2d(2048,100,stride=1,kernel_size=1)
-        self.global_avg_pool = nn.AdaptiveAvgPool2d((1,1))
-        self.linear = nn.Linear(2048,num_classes)
 
         # self.upsample = nn.Conv2d(in_channels=num_classes, out_channels=num_classes, kernel_size=2, stride=1, padding=1,dilation=2)
 
@@ -283,7 +283,6 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        layer_outputs=[]
         size = (x.shape[2], x.shape[3])
 
         x = self.conv1(x)
@@ -292,23 +291,18 @@ class ResNet(nn.Module):
         x = self.maxpool(x)
 
         x = self.layer1(x) #block1
-        #layer_outputs.append(x)
         x = self.layer2(x) #block2
-        #layer_outputs.append(x)
         x = self.layer3(x) #block3
-        #layer_outputs.append(x)
         x = self.layer4(x) #block4
-        layer_outputs= x
 
-        #print("backbone output ",x.size())
-        x = self.global_avg_pool(x)
-        #print("pooling output ", x.size())
-        x=x.view(x.size(0), -1)
-        #print("x output ", x.size())
-        x = self.linear(x)
-        # for idx,model in enumerate(layer_outputs):
-        #     print(f"{idx} model {model.size()}")
-        return x,layer_outputs
+
+        x = self.aspp(x)
+
+
+        x = nn.Upsample(size, mode='bilinear', align_corners=True)(x)
+
+
+        return x
 
 
 
@@ -333,7 +327,7 @@ def resnet50(pretrained=False, num_groups=None, weight_std=False, **kwargs):
             overlap_dict = {k[7:]: v for k, v in pretrained_dict.items() if k[7:] in model_dict}
             assert len(overlap_dict) == 312
         elif not num_groups and not weight_std:
-            print("2")
+            #print("2")
             pretrained_dict = model_zoo.load_url(model_urls['resnet50'])
             overlap_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}
         else:
@@ -383,3 +377,86 @@ def resnet152(pretrained=False, **kwargs):
     if pretrained:
         model.load_state_dict(model_zoo.load_url(model_urls['resnet152']))
     return model
+
+
+class ASPPConv(nn.Sequential):
+    def __init__(self, in_channels, out_channels, dilation):
+        modules = [
+            nn.Conv2d(in_channels, out_channels, 3, padding=dilation, dilation=dilation, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        ]
+        super(ASPPConv, self).__init__(*modules)
+
+class ASPPPooling(nn.Sequential):
+    def __init__(self, in_channels, out_channels):
+        super(ASPPPooling, self).__init__(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True))
+
+    def forward(self, x):
+        size = x.shape[-2:]
+        x = super(ASPPPooling, self).forward(x)
+        return F.interpolate(x, size=size, mode='bilinear', align_corners=False)
+
+
+
+class ASPP(nn.Module):
+    def __init__(self, in_channels, atrous_rates):
+        super(ASPP, self).__init__()
+        out_channels = 21
+        modules = []
+        modules.append(nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)))
+
+        rate1, rate2, rate3 = tuple(atrous_rates)
+        modules.append(ASPPConv(in_channels, out_channels, rate1))
+        modules.append(ASPPConv(in_channels, out_channels, rate2))
+        modules.append(ASPPConv(in_channels, out_channels, rate3))
+        modules.append(ASPPPooling(in_channels, out_channels))
+
+        self.convs = nn.ModuleList(modules)
+
+        self.project = nn.Sequential(
+            nn.Conv2d(5 * out_channels, out_channels, 1, bias=False),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.1),)
+
+    def forward(self, x):
+        res = []
+        for conv in self.convs:
+            res.append(conv(x))
+        res = torch.cat(res, dim=1)
+
+
+        return self.project(res)
+
+
+class DeepLabHead(nn.Module):
+    def __init__(self, in_channels, num_classes, aspp_dilate=[12, 24, 36]):
+        super(DeepLabHead, self).__init__()
+
+        self.classifier = nn.Sequential(
+            ASPP(in_channels, aspp_dilate),
+            nn.Conv2d(256, 256, 3, padding=1, bias=False),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, num_classes, 1)
+        )
+        self._init_weight()
+
+    def forward(self, feature):
+        return self.classifier( feature['out'] )
+
+    def _init_weight(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight)
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
