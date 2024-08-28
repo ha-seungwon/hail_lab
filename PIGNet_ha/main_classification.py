@@ -23,7 +23,6 @@ from model_src import Classification_resnet, PIGNet_GSPonly_classification, swin
 import torch.nn.functional as F
 
 
-from pascal import VOCSegmentation
 from utils import AverageMeter
 from torchvision.datasets import ImageFolder
 from functools import partial
@@ -183,13 +182,13 @@ def make_batch(samples, batch_size, feature_shape):
 def main():
     # make fake args
     args = argparse.Namespace()
-    args.dataset = "CIFAR-100" #CIFAR-10 CIFAR-100    imagenet  pascal
+    args.dataset = "CIFAR-100" #CIFAR-10 CIFAR-100    imagenet
     args.model = "Resnet" #Resnet  PIGNet_GSPonly_classification  vit_b_16  swin
     args.backbone = "resnet101"
     args.workers = 4
     args.epochs = 50
     args.batch_size = 8
-    args.train = True
+    args.train = False
     args.crop_size = 513 #513
     args.base_lr = 0.007
     args.last_mult = 1.0
@@ -211,8 +210,9 @@ def main():
     else:
         args.device = 'cpu'
 
-    wandb.init(project='pignet_classification', name=args.model+'_'+args.backbone+ '_embed' + str(args.embedding_size) +'_nlayer' + str(args.n_layer) + '_'+args.exp,
-                config=args.__dict__)
+    if args.train:
+        wandb.init(project='pignet_classification', name=args.model+'_'+args.backbone+ '_embed' + str(args.embedding_size) +'_nlayer' + str(args.n_layer) + '_'+args.exp,
+                    config=args.__dict__)
 
     loss_data = pd.DataFrame(columns=["train_loss"])
     loss_list = []
@@ -223,53 +223,43 @@ def main():
     model_fname = 'model/classification_{0}_{1}_{2}_v3.pth'.format(
         args.model,args.backbone, args.dataset)
 
-    if args.dataset == 'pascal':
-        image_size = 513
-        dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
-                                 train=args.train, crop_size=args.crop_size, process= None)
-        valid_dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
-                                        train=not (args.train), crop_size=args.crop_size, process= None)
-
-        zoom_factor = 0.5 # zoom in, out value 양수면 줌 음수면 줌아웃
-        overlap_percentage = 0.3
-        pattern_repeat_count = 3
-        process_valid_dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
-                                        train=args.train,crop_size=args.crop_size, process= args.process_type,process_value = zoom_factor,overlap_percentage= overlap_percentage,pattern_repeat_count=pattern_repeat_count)
-        for i in range(len(process_valid_dataset)):
-            img, target = process_valid_dataset[i]
-            if img ==None or target ==None:
-                continue
-    elif args.dataset == 'imagenet':
+    if args.dataset == 'imagenet':
         # 데이터셋 경로 및 변환 정의
         image_size=224
         data_dir = 'C:/Users/hail/Desktop/ha/data/Imagenet'
         # Set the zoom factor (e.g., 1.2 to zoom in, 0.8 to zoom out)
-        zoom_factor = 1.2
 
-        # Define transformations
-        transform = transforms.Compose([
-            transforms.Resize((image_size, image_size)),  # Resize to fixed size
-            ZoomTransform(zoom_factor),  # Apply the zoom transformation
-            transforms.ToTensor(),  # Convert image to tensor
-        ])
-
-        # pattern_repeat_count = 2
-        #
-        # # Define transformations
-        # transform = transforms.Compose([
-        #     transforms.Resize((image_size, image_size)),  # Resize to fixed size
-        #     RepeatTransform(pattern_repeat_count),  # Apply the repeat transformation
-        #     transforms.ToTensor(),  # Convert image to tensor
-        # ])
+        if args.train:
+            # Define transformations
+            transform = transforms.Compose([
+                transforms.Resize((image_size, image_size)),  # Resize to fixed size
+                transforms.ToTensor(),  # Convert image to tensor
+            ])
+        else:
+            zoom_factor = 1.2
+            # Define transformations
+            transform = transforms.Compose([
+                transforms.Resize((image_size, image_size)),  # Resize to fixed size
+                ZoomTransform(zoom_factor),  # Apply the zoom transformation
+                transforms.ToTensor(),  # Convert image to tensor
+            ])
+            # pattern_repeat_count = 2
+            #
+            # # Define transformations
+            # transform = transforms.Compose([
+            #     transforms.Resize((image_size, image_size)),  # Resize to fixed size
+            #     RepeatTransform(pattern_repeat_count),  # Apply the repeat transformation
+            #     transforms.ToTensor(),  # Convert image to tensor
+            # ])
 
         # Load datasets with ImageFolder and apply transformations
         dataset = ImageFolder(root=f'{data_dir}/train', transform=transform)
         valid_dataset = ImageFolder(root=f'{data_dir}/val', transform=transform)
 
 
-        #dataset = torchvision.datasets.ImageFolder(root=data_dir+'/train', transform=transform)
-
-        #valid_dataset = torchvision.datasets.ImageFolder(root=data_dir+'/val', transform=transform)
+        # dataset = torchvision.datasets.ImageFolder(root=data_dir+'/train', transform=transform)
+        #
+        # valid_dataset = torchvision.datasets.ImageFolder(root=data_dir+'/val', transform=transform)
         idx2label = []
         cls2label = {}
 
@@ -283,10 +273,21 @@ def main():
 
     elif args.dataset == 'CIFAR-100':
         image_size = 32
-        transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))  # 이미지를 정규화합니다.
-        ])
+
+        if args.train:
+            transform = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))  # 이미지를 정규화합니다.
+            ])
+        else:
+            zoom_factor = 1.5
+            transform = transforms.Compose([
+                ZoomTransform(zoom_factor),  # Apply the zoom transformation
+                transforms.ToTensor(),
+                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))  # 이미지를 정규화합니다.
+            ])
+
+
 
         # CIFAR-100 데이터셋 로드
         dataset = torchvision.datasets.CIFAR100(root='C:/Users/hail/Desktop/ha/model', train=True, download=True, transform=transform)

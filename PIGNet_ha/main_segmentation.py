@@ -193,6 +193,17 @@ def main():
                                             train=not (args.train), crop_size=args.crop_size, transform=transform,
                                             target_transform=transform)
 
+            zoom_factor = 0.5  # zoom in, out value 양수면 줌 음수면 줌아웃
+            overlap_percentage = 0.3
+            pattern_repeat_count = 3
+            if args.process_type != None:
+                valid_dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
+                                                train=args.train, crop_size=args.crop_size,
+                                                process=args.process_type, process_value=zoom_factor,
+                                                overlap_percentage=overlap_percentage,
+                                                pattern_repeat_count=pattern_repeat_count)
+
+
     else:
         raise ValueError('Unknown dataset: {}'.format(args.dataset))
     if args.backbone in ["resnet50","resnet101","resnet152"]:
