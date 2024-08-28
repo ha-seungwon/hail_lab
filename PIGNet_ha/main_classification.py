@@ -184,11 +184,11 @@ def main():
     args = argparse.Namespace()
     args.dataset = "CIFAR-100" #CIFAR-10 CIFAR-100    imagenet
     args.model = "Resnet" #Resnet  PIGNet_GSPonly_classification  vit_b_16  swin
-    args.backbone = "resnet101"
+    args.backbone = "resnet50"
     args.workers = 4
     args.epochs = 50
     args.batch_size = 8
-    args.train = False
+    args.train = True
     args.crop_size = 513 #513
     args.base_lr = 0.007
     args.last_mult = 1.0

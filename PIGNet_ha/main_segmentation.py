@@ -155,29 +155,6 @@ def main():
         args.model,args.backbone, args.dataset)
 
     if args.dataset == 'pascal':
-
-        # Define the desired size
-        desired_size = 513
-
-
-        # Define the transformation pipeline for zoom in and zoom out
-        transform_zoom_in = transforms.Compose([
-            transforms.Resize((int(desired_size * 2), int(desired_size * 2))),  # Slight enlargement
-            transforms.CenterCrop(desired_size)  # Crop to desired size
-        ])
-
-        # Calculate the desired size after zoom out
-        desired_size_zoom_out = int(desired_size / 1.5)+1
-
-        # Calculate the padding needed for zoom out
-        padding_zoom_out = (desired_size - desired_size_zoom_out) // 2
-
-        transform_zoom_out = transforms.Compose([
-            transforms.Resize(desired_size_zoom_out),  # 이미지 크기를 1.5배 축소
-            transforms.Pad(padding_zoom_out, fill=0, padding_mode='constant'),  # 이미지를 원하는 크기로 패딩하고 fill 값을 0으로 설정
-        ])
-
-        transform = transform_zoom_out
         if args.train:
             print("train dataset")
             dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
@@ -185,13 +162,6 @@ def main():
             valid_dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
                                             train=not (args.train), crop_size=args.crop_size)
         else:
-
-            dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
-                                      train=args.train, crop_size=args.crop_size, transform=transform,
-                                      target_transform=transform)
-            valid_dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
-                                            train=not (args.train), crop_size=args.crop_size, transform=transform,
-                                            target_transform=transform)
 
             zoom_factor = 0.5  # zoom in, out value 양수면 줌 음수면 줌아웃
             overlap_percentage = 0.3
@@ -454,28 +424,15 @@ def main():
         union_meter = AverageMeter()
 
         feature_shape = (2048, 33, 33)
-        dataset_loader = torch.utils.data.DataLoader(
-            dataset, batch_size=args.batch_size, shuffle=False,
+        valid_dataset_loader = torch.utils.data.DataLoader(
+            valid_dataset, batch_size=args.batch_size, shuffle=False,
             pin_memory=True, num_workers=args.workers,
             collate_fn=lambda samples: make_batch(samples, args.batch_size, feature_shape))
 
 
-        for i in tqdm(range(len(dataset))):
+        for i in tqdm(range(len(valid_dataset_loader))):
             inputs, target = dataset[i]
             inputs = Variable(inputs.to(args.device))
-
-            # print(inputs.size())
-            # image = transforms.ToPILImage()(inputs)
-            # image.show()
-            #
-            # print(target.size())
-            # target = target.to(torch.uint8)
-            # image = transforms.ToPILImage()(target)
-            # image.show()
-            #
-            #
-            # exit()
-
             outputs = model(inputs.unsqueeze(0))
             _, pred = torch.max(outputs, 1)
             pred = pred.data.cpu().numpy().squeeze().astype(np.uint8)
