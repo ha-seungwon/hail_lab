@@ -13,8 +13,8 @@ from tqdm.auto import tqdm
 from torchvision import transforms
 from torch.utils.data import RandomSampler
 import pandas as pd
-from PIGNet_ha.model_src import PIGNet_GSPonly, ASPP
-from PIGNet_ha.model_src.Mask2Former import Mask2Former
+from model_src import PIGNet_GSPonly, ASPP
+from model_src.Mask2Former import Mask2Former
 # from Mask2Former import Mask2Former
 
 from pascal import VOCSegmentation

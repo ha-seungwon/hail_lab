@@ -1,16 +1,20 @@
 import argparse
+
+import cv2
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import pdb
 from scipy.spatial.distance import cosine
+from PIL import Image
 from torch.autograd import Variable
 from tqdm.auto import tqdm
 from torch.utils.data import RandomSampler
 import pandas as pd
 import os
 from torchvision import transforms
+import math
 
 print("Current directory:", os.getcwd())
 
@@ -21,7 +25,7 @@ import torch.nn.functional as F
 
 from pascal import VOCSegmentation
 from utils import AverageMeter
-
+from torchvision.datasets import ImageFolder
 from functools import partial
 import torchvision
 # time.sleep(600)600
@@ -179,7 +183,7 @@ def make_batch(samples, batch_size, feature_shape):
 def main():
     # make fake args
     args = argparse.Namespace()
-    args.dataset = "imagenet" #CIFAR-10 CIFAR-100    imagenet  pascal
+    args.dataset = "CIFAR-100" #CIFAR-10 CIFAR-100    imagenet  pascal
     args.model = "Resnet" #Resnet  PIGNet_GSPonly_classification  vit_b_16  swin
     args.backbone = "resnet101"
     args.workers = 4
@@ -199,8 +203,8 @@ def main():
     args.gpu = 0
     args.embedding_size = 512
     args.n_layer = 6
-    args.n_skip_l = 2
-    args.process_type = "repeat"  #zoom overlap repeat
+    args.n_skip_l = 2 #2
+    args.process_type = "zoom"  #zoom overlap repeat None
     # if is cuda available device
     if torch.cuda.is_available():
         args.device = 'cuda'
@@ -239,13 +243,33 @@ def main():
         # 데이터셋 경로 및 변환 정의
         image_size=224
         data_dir = 'C:/Users/hail/Desktop/ha/data/Imagenet'
-        transform = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-        ])
-        dataset = torchvision.datasets.ImageFolder(root=data_dir+'/train', transform=transform)
+        # Set the zoom factor (e.g., 1.2 to zoom in, 0.8 to zoom out)
+        zoom_factor = 1.2
 
-        valid_dataset = torchvision.datasets.ImageFolder(root=data_dir+'/val', transform=transform)
+        # Define transformations
+        transform = transforms.Compose([
+            transforms.Resize((image_size, image_size)),  # Resize to fixed size
+            ZoomTransform(zoom_factor),  # Apply the zoom transformation
+            transforms.ToTensor(),  # Convert image to tensor
+        ])
+
+        # pattern_repeat_count = 2
+        #
+        # # Define transformations
+        # transform = transforms.Compose([
+        #     transforms.Resize((image_size, image_size)),  # Resize to fixed size
+        #     RepeatTransform(pattern_repeat_count),  # Apply the repeat transformation
+        #     transforms.ToTensor(),  # Convert image to tensor
+        # ])
+
+        # Load datasets with ImageFolder and apply transformations
+        dataset = ImageFolder(root=f'{data_dir}/train', transform=transform)
+        valid_dataset = ImageFolder(root=f'{data_dir}/val', transform=transform)
+
+
+        #dataset = torchvision.datasets.ImageFolder(root=data_dir+'/train', transform=transform)
+
+        #valid_dataset = torchvision.datasets.ImageFolder(root=data_dir+'/val', transform=transform)
         idx2label = []
         cls2label = {}
 
@@ -617,13 +641,15 @@ def main():
             shuffle=False
         )
 
-        pixel_similarity_value = [[0 for _ in range(4)] for _ in range(args.n_layer + 1)]
-        count = 0
         with torch.no_grad():
             model.eval()
             losses_test = 0.0
             correct = 0
             total = 0
+
+
+            distances = [1, 2, 3, 4]
+            distances_sum= [ 0 for _ in range(len(distances))]
 
             for i, (inputs, labels) in enumerate(tqdm(valid_dataset)):
                 inputs = inputs.to(args.device)
@@ -631,27 +657,27 @@ def main():
                 outputs, layer_outputs = model(inputs)
                 _, predicted = outputs.max(1)
 
-                radii=[1,2,4,6]
-                plot_cosine_similarity(layer_outputs[0], radii)
-
                 total += labels.size(0)
                 correct += predicted.eq(labels).sum().item()
 
-
-                #print("gsp_outputs",gsp_outputs)
-                # calculate the gsp_outputs output feature map
-                # if i % 10 == 0 :
-                #     count+=1
-                #     result_similarity = []
-                #     for idx, out in enumerate(gsp_outputs): #  gsp_output는 8개 layer + 오리지널 데이터 1 개
-                #         tmp=compute_similarity(out,labels) #tmp 는 거리에 따른 4개의 output
-                #         result_similarity.append(tmp)
-                #     #result_similarity 는 8개가 생기는 임시 리스트
-                #     for idx, data in enumerate(result_similarity): #result_similarity 의 길이는 8
-                #         for idx_, data_ in enumerate(data): # model 는 4개의 길이가 있는
-                #             pixel_similarity_value[idx][idx_] += data_
+            # 텐서 크기에서 중심 좌표를 자동으로 설정 (H/2, W/2)
+            H, W = layer_outputs.shape[2], layer_outputs.shape[3]
+            center_x, center_y = H // 2, W // 2
 
 
+
+            # 중심점 feature 벡터 (512차원)
+            center_vector = layer_outputs[0, :, center_x, center_y]
+
+
+
+            # 각 거리에 대해 코사인 유사도 계산
+            # for distance in distances:
+            #     coords = get_coords_by_distance(center_x, center_y, distance, H, W)  # 거리별 좌표 구하기
+            #     cos_sims = calculate_cosine_similarity(coords, center_vector, layer_outputs)  # 유사도 계산
+            #     mean_cos_sim = sum(cos_sims) / len(cos_sims)  # 평균 코사인 유사도 계산
+            #     index = distances.index(distance)
+            #     distances_sum[index] += mean_cos_sim
 
 
             accuracy = 100 * correct / total
@@ -659,58 +685,113 @@ def main():
             #    for idx_, data_ in enumerate(model):
             #        pixel_similarity_value[idx][idx_]=data_/count
             print('Accuracy: {:.2f}%'.format(accuracy))
-            print("mean of distance ",pixel_similarity_value)
+            for i, distance in enumerate(distances):
+                print(f"Sum of Cosine similarity for distance {distance}: {distances_sum[i]/len(valid_dataset)}")
 
-def visualize_sample(img, target):
+
+# 유클리드 거리에 따라 일정 거리에 있는 좌표들을 찾는 함수
+def get_coords_by_distance(center_x, center_y, distance, feature_map_size_h, feature_map_size_w):
+    coords = []
+    for i in range(feature_map_size_h):
+        for j in range(feature_map_size_w):
+            dist = math.sqrt((i - center_x) ** 2 + (j - center_y) ** 2)
+            if abs(dist - distance) < 0.5:  # 거리 차이가 0.5 이내면 같은 거리로 간주
+                coords.append((i, j))
+    return coords
+
+
+# 코사인 유사도 계산 함수
+def calculate_cosine_similarity(coords, center_vector, tensor):
+    cos_sims = []
+    for (x, y) in coords:
+        vector = tensor[0, :, x, y]  # 해당 좌표의 512차원 벡터
+        cos_sim = F.cosine_similarity(center_vector, vector, dim=0)  # 코사인 유사도 계산
+        cos_sims.append(cos_sim.item())
+    return cos_sims
+
+def zoom_center(image, zoom_factor):
     """
-    Visualizes the image and its corresponding target mask.
+    Zooms into or out of the image around the center by the given zoom_factor.
+    Keeps the image size unchanged.
     """
-    fig, ax = plt.subplots(1, 2, figsize=(10, 5))
-    ax[0].imshow(img)
-    ax[0].set_title('Image')
-    ax[0].axis('off')
+    width, height = image.size
 
-    ax[1].imshow(target, cmap='gray')
-    ax[1].set_title('Target')
-    ax[1].axis('off')
+    if zoom_factor > 1:
+        # Zoom in
+        new_width = int(width / zoom_factor)
+        new_height = int(height / zoom_factor)
 
-    plt.show()
+        # Center coordinates
+        center_x, center_y = width // 2, height // 2
+
+        # Calculate the crop box
+        left = max(center_x - new_width // 2, 0)
+        right = min(center_x + new_width // 2, width)
+        top = max(center_y - new_height // 2, 0)
+        bottom = min(center_y + new_height // 2, height)
+
+        # Crop the image, then resize back to the original dimensions
+        image = image.crop((left, top, right, bottom)).resize((width, height), Image.Resampling.LANCZOS)
+
+    elif zoom_factor < 1:
+        # Zoom out
+        new_width = int(width * zoom_factor)
+        new_height = int(height * zoom_factor)
+
+        # Resize the image to the new dimensions
+        resized_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+        # Create a new white image and paste the resized image in the center
+        new_image = Image.new('RGB', (width, height), (255, 255, 255))
+        new_image.paste(resized_image, ((width - new_width) // 2, (height - new_height) // 2))
+
+        image = new_image
+
+    return image
+def repeat(image, pattern_repeat_count):
+    """
+    Repeat the inner region of the image in a grid pattern.
+    pattern_repeat_count: Number of repetitions for each dimension (x, y)
+    """
+    image_size = image.size
+    numpy_image = np.array(image)
+    original_opencv_image = cv2.cvtColor(numpy_image, cv2.COLOR_RGB2BGR)
+
+    # Use the entire image as the inner region to repeat
+    inner_region = original_opencv_image
+    inner_image = Image.fromarray(cv2.cvtColor(inner_region, cv2.COLOR_BGR2RGB))
+    inner_image_resize = inner_image.resize((image_size[0], image_size[1]))
+
+    # Create a new empty image of size (image_size[0] * repeat_count, image_size[1] * repeat_count)
+    new_image_size = (image_size[0] * pattern_repeat_count, image_size[1] * pattern_repeat_count)
+    new_image = Image.new('RGB', new_image_size)
+
+    # Paste the resized inner image in a grid pattern
+    for i in range(pattern_repeat_count):
+        for j in range(pattern_repeat_count):
+            new_image.paste(inner_image_resize, (i * image_size[0], j * image_size[1]))
+
+    # Resize the final repeated image back to the original image size
+    final_image = new_image.resize(image_size)
+
+    return final_image
+# Define a custom transform class for zoom
+class ZoomTransform:
+    def __init__(self, zoom_factor):
+        self.zoom_factor = zoom_factor
+
+    def __call__(self, image):
+        return zoom_center(image, self.zoom_factor)
 
 
-def get_cosine_similarity(feature_map, center, radius):
-    """Calculate the average cosine similarity within a given radius from the center."""
-    channels = feature_map.shape[0]
-    height, width = feature_map.shape[1:]
-    center_y, center_x = center
+class RepeatTransform:
+    def __init__(self, pattern_repeat_count):
+        self.pattern_repeat_count = pattern_repeat_count
 
-    similarities = []
-    center_vector = feature_map[:, center_y, center_x].reshape(-1)
-
-    for y in range(height):
-        for x in range(width):
-            if np.sqrt((y - center_y) ** 2 + (x - center_x) ** 2) <= radius:
-                vec = feature_map[:, y, x].reshape(-1)
-                similarity = 1 - cosine(center_vector.cpu(), vec.cpu())
-                similarities.append(similarity)
-
-    return np.mean(similarities) if similarities else 0
+    def __call__(self, image):
+        return repeat(image, self.pattern_repeat_count)
 
 
-def plot_cosine_similarity(feature_map, radii):
-    center = (feature_map.shape[1] // 2, feature_map.shape[2] // 2)
-    similarities = []
-
-    for radius in radii:
-        avg_similarity = get_cosine_similarity(feature_map, center, radius)
-        similarities.append(avg_similarity)
-
-    plt.figure(figsize=(10, 6))
-    plt.plot(radii, similarities, marker='o')
-    plt.xlabel('Radius')
-    plt.ylabel('Average Cosine Similarity')
-    plt.title('Cosine Similarity vs. Radius')
-    plt.grid(True)
-    plt.show()
 
 
 if __name__ == "__main__":

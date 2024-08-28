@@ -205,13 +205,12 @@ class GSP(nn.Module):
 
         self.edge_index = None
         self.graph_data = None
-        self.grid_size = 14 #feature map size  33 for pascal
+        self.grid_size = 14  #feature map size  33 for pascal   8 for cifar-100  14 for imagenet
 
         self.gelu = nn.GELU()
 
         # input_conv =  self.depth*(n_layers//self.n_skip_l + 1)
         input_conv =  self.embedding_size*(n_layers//self.n_skip_l + 1)
-
         self.conv2 = nn.Conv2d(input_conv,self.embedding_size, kernel_size=1, stride=1)
 
     def edge(self, grid_size):
@@ -303,7 +302,7 @@ class GSP(nn.Module):
         
         gsp_layer_outputs=[]
 
-        gsp_layer_outputs.append(gsp_layer_input)
+        #gsp_layer_outputs.append(gsp_layer_input)
         for ii in range(len(self.gn_layers)):
             x, edge = self.gn_layers[ii](x, edge_idx)
             # x_s[ii] = x
@@ -324,7 +323,7 @@ class GSP(nn.Module):
         # Output
         x = self.conv2(output)
 
-        return x, None #,gsp_layer_outputs
+        return x #,gsp_layer_outputs
 
 class Bottleneck(nn.Module):
     expansion = 4
@@ -379,6 +378,7 @@ class ResNet(nn.Module):
         if 'n_skip_l' in kwargs:
             self.n_skip_l = kwargs['n_skip_l']
         else:
+
             self.n_skip_l = 1
 
 
@@ -399,8 +399,8 @@ class ResNet(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         self.layer1 = self._make_layer(block,  64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2) # stirde 2 for imagene
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2) # stirde 2 for imagenet
         self.layer4 = self._make_layer(block, 512, layers[3], stride=1,dilation=2)
         # remove require_grad for self.layer4
         for param in self.layer4.parameters():
@@ -453,7 +453,7 @@ class ResNet(nn.Module):
         #x = self.layer4(x) #block4
 
 
-        x, gsp_outputs = self.pyramid_gnn(x)
+        x = self.pyramid_gnn(x)
 
         return_gsp_output= x
 
