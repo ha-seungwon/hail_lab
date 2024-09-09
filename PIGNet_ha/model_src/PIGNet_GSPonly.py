@@ -200,7 +200,7 @@ class GSP(nn.Module):
 
         self.edge_index = None
         self.graph_data = None
-        self.grid_size = 33
+        self.grid_size = 32
 
         self.gelu = nn.GELU()
 
@@ -297,7 +297,7 @@ class GSP(nn.Module):
             # x_s[ii] = x
             if (ii + 1) % self.n_skip_l == 0:
                 x_s_f.append(self.graph2feature(x, num_nodes=(self.grid_size ** 2),
-                                                feature_shape=(self.embedding_size, 33, 33)))
+                                                feature_shape=(self.embedding_size, self.grid_size, self.grid_size)))
 
         output = torch.cat(x_s_f, dim=1)
 

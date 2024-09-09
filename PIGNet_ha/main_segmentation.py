@@ -1,4 +1,5 @@
 import argparse
+import math
 import os
 import numpy as np
 import torch
@@ -7,6 +8,7 @@ import torch.optim as optim
 import pdb
 import cv2
 from PIL import Image
+import torch.nn.functional as F
 from scipy.io import loadmat
 from torch.autograd import Variable
 from tqdm.auto import tqdm
@@ -16,18 +18,14 @@ import pandas as pd
 from model_src import PIGNet_GSPonly, ASPP
 from model_src.Mask2Former import Mask2Former
 # from Mask2Former import Mask2Former
-
 from pascal import VOCSegmentation
 from utils import AverageMeter, inter_and_union
 from functools import partial
-
-# time.sleep(600)600
-def make_batch_fn(samples, batch_size, feature_shape):
-    return make_batch(samples, batch_size, feature_shape)
-
-
 import subprocess
 
+
+def make_batch_fn(samples, batch_size, feature_shape):
+    return make_batch(samples, batch_size, feature_shape)
 
 def find_contours(mask):
     mask_array = np.array(mask)
@@ -44,6 +42,26 @@ def get_cpu_temperature():
             return temperature
 
     return None  # in case temperature is not found
+
+# 유클리드 거리에 따라 일정 거리에 있는 좌표들을 찾는 함수
+def get_coords_by_distance(center_x, center_y, distance, feature_map_size_h, feature_map_size_w):
+    coords = []
+    for i in range(feature_map_size_h):
+        for j in range(feature_map_size_w):
+            dist = math.sqrt((i - center_x) ** 2 + (j - center_y) ** 2)
+            if abs(dist - distance) < 0.5:  # 거리 차이가 0.5 이내면 같은 거리로 간주
+                coords.append((i, j))
+    return coords
+
+
+# 코사인 유사도 계산 함수
+def calculate_cosine_similarity(coords, center_vector, tensor):
+    cos_sims = []
+    for (x, y) in coords:
+        vector = tensor[0, :, x, y]  # 해당 좌표의 512차원 벡터
+        cos_sim = F.cosine_similarity(center_vector, vector, dim=0)  # 코사인 유사도 계산
+        cos_sims.append(cos_sim.item())
+    return cos_sims
 
 
 
@@ -84,21 +102,31 @@ parser.add_argument('--workers', type=int, default=4,
                     help='number of model loading workers')
 parser.add_argument('--model', type=str, default="deeplab",
                     help='model name')
-
+parser.add_argument('--process_type', type=str, default="zoom",
+                    help='process_type')
 args = parser.parse_args()
+
+
 def model_size(model):
     total_size = 0
     for param in model.parameters():
-        # °¢ ÆÄ¶ó¹ÌÅÍÀÇ ¿ø¼Ò °³¼ö °è»ê
         num_elements = torch.prod(torch.tensor(param.size())).item()
-        # ¿ø¼Ò Å¸ÀÔ º°·Î ¹ÙÀÌÆ® Å©±â °è»ê (¿¹: float32 -> 4 bytes)
         num_bytes = num_elements * param.element_size()
         total_size += num_bytes
     return total_size
+
 def make_batch(samples, batch_size, feature_shape):
     inputs = [sample[0] for sample in samples]
     labels = [sample[1] for sample in samples]
-
+    """
+    print(inputs[0].shape)
+    print(labels[0].shape)
+    padding_tensor = torch.zeros(((2,) + tuple(inputs[0].shape[:])))
+    print(padding_tensor.shape,torch.stack(inputs).shape)
+    padded_inputs = torch.cat([torch.stack(inputs), padding_tensor], dim=0)
+    print(padded_inputs.shape)
+    padded_labels = torch.cat([torch.stack(labels), torch.zeros((2,)+tuple(labels[0].shape[:]))], dim=0)
+    print(padded_labels.shape)"""
     if len(samples) < batch_size:
 
         num_padding = batch_size - len(samples)
@@ -111,17 +139,15 @@ def make_batch(samples, batch_size, feature_shape):
 
         return [torch.stack(inputs), torch.stack(labels)]
 
-
-
 def main():
     # make fake args
     args = argparse.Namespace()
     args.dataset = "pascal"
-    args.model = "PIGNet_GSPonly" #PIGNet_GSPonly  Mask2Former ASPP
+    args.model = "Mask2Former" #PIGNet_GSPonly  Mask2Former ASPP
     args.backbone = "resnet101"
-    args.workers = 4
+    args.workers = 1
     args.epochs = 50
-    args.batch_size = 4
+    args.batch_size = 16
     args.train = True
     args.crop_size = 512
     args.base_lr = 0.007
@@ -137,6 +163,8 @@ def main():
     args.embedding_size = 21
     args.n_layer = 8
     args.n_skip_l = 2
+    args.process_type = None
+
 
     # if is cuda available device
     if torch.cuda.is_available():
@@ -144,10 +172,9 @@ def main():
     else:
         args.device = 'cpu'
 
+    print("cuda available",args.device)
 
-    loss_data = pd.DataFrame(columns=["train_loss"])
     loss_list = []
-
     # assert torch.cuda.is_available()
     torch.backends.cudnn.benchmark = True
 
@@ -162,7 +189,6 @@ def main():
             valid_dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
                                             train=not (args.train), crop_size=args.crop_size)
         else:
-
             zoom_factor = 0.5  # zoom in, out value 양수면 줌 음수면 줌아웃
             overlap_percentage = 0.3
             pattern_repeat_count = 3
@@ -222,7 +248,6 @@ def main():
         if args.freeze_bn:
             for m in model.modules():
                 if isinstance(m, nn.BatchNorm2d):
-                    print("12345")
                     m.eval()
                     m.weight.requires_grad = False
                     m.bias.requires_grad = False
@@ -235,7 +260,6 @@ def main():
                         list(model.module.layer3.parameters()) +
                         list(model.module.layer4.parameters()))
             if args.model == "PIGNet_GSPonly":
-                #print(model.module)
                 last_params = list(model.module.pyramid_gnn.parameters())
             else:
 
@@ -248,8 +272,6 @@ def main():
                 lr=args.base_lr, momentum=0.9, weight_decay=0.0001)
         else:
             if args.model =='Mask2Former':
-                #print(model)
-                #print(model.module)
                 last_params = list(model.module.pixel_decoder.parameters())
                 last_params_ = list(model.module.transformer_decoder.parameters())
             optimizer = optim.SGD([
@@ -269,7 +291,6 @@ def main():
             batch_size=args.batch_size,
             shuffle=args.train,
             pin_memory=True,
-            num_workers=args.workers,
             collate_fn=collate_fn
         )
 
@@ -308,7 +329,6 @@ def main():
 
                 lr = args.base_lr * (1 - float(cur_iter) / max_iter) ** 0.9
                 optimizer.param_groups[0]['lr'] = lr
-                # if args.model == "deeplab":
                 optimizer.param_groups[1]['lr'] = lr * args.last_mult
 
                 inputs = Variable(inputs.to(args.device))
@@ -326,7 +346,6 @@ def main():
                 #print('batch_loss: {:.5f}'.format(loss))
 
                 log['train/batch/loss'] = loss.to('cpu')
-                # log['train/temp'] = get_cpu_temperature()
 
                 cnt+=1
                 train_step += 1
@@ -334,8 +353,6 @@ def main():
                 optimizer.step()
                 optimizer.zero_grad()
 
-                # if train_step % 30 == 0:
-                #     time.sleep(15)
 
             loss_avg = loss_sum/len(dataset_loader)
             log['train/epoch/loss'] = loss_avg
@@ -362,7 +379,6 @@ def main():
 
                 if patience > 50:
                     break
-            # time.sleep(150)
             print("Evaluating !!! ")
 
             inter_meter = AverageMeter()
@@ -408,7 +424,7 @@ def main():
                 log['test/epoch/iou'] = miou.item()
             # time.sleep(60)
             model.train()
-    else:
+    else: #evaluating
         print("Evaluating !!! ")
         torch.cuda.set_device(args.gpu)
         model = model.to(args.device)
@@ -429,11 +445,13 @@ def main():
             pin_memory=True, num_workers=args.workers,
             collate_fn=lambda samples: make_batch(samples, args.batch_size, feature_shape))
 
-
+        distances = [1, 2, 3, 4]
+        distances_sum = [0 for _ in range(len(distances))]
         for i in tqdm(range(len(valid_dataset_loader))):
             inputs, target = dataset[i]
             inputs = Variable(inputs.to(args.device))
-            outputs = model(inputs.unsqueeze(0))
+            #outputs = model(inputs.unsqueeze(0))
+            outputs, layer_outputs = model(inputs.unsqueeze(0))
             _, pred = torch.max(outputs, 1)
             pred = pred.data.cpu().numpy().squeeze().astype(np.uint8)
             mask = target.numpy().astype(np.uint8)
@@ -450,6 +468,26 @@ def main():
             union_meter.update(union)
 
 
+            # 텐서 크기에서 중심 좌표를 자동으로 설정 (H/2, W/2)
+            # H, W = layer_outputs.shape[2], layer_outputs.shape[3]
+            # center_x, center_y = H // 2, W // 2
+            #
+            # 중심점 feature 벡터 (512차원)
+            # center_vector = layer_outputs[0, :, center_x, center_y]
+            #
+            # 각 거리에 대해 코사인 유사도 계산
+            # for distance in distances:
+            #     coords = get_coords_by_distance(center_x, center_y, distance, H, W)  # 거리별 좌표 구하기
+            #     cos_sims = calculate_cosine_similarity(coords, center_vector, layer_outputs)  # 유사도 계산
+            #     mean_cos_sim = sum(cos_sims) / len(cos_sims)  # 평균 코사인 유사도 계산
+            #     index = distances.index(distance)
+            #     distances_sum[index] += mean_cos_sim
+
+        # for idx, model in enumerate(pixel_similarity_value):
+        #    for idx_, data_ in enumerate(model):
+        #        pixel_similarity_value[idx][idx_]=data_/count
+        for i, distance in enumerate(distances):
+            print(f"Sum of Cosine similarity for distance {distance}: {distances_sum[i] / len(valid_dataset)}")
 
         iou = inter_meter.sum / (union_meter.sum + 1e-10)
         for i, val in enumerate(iou):
@@ -458,6 +496,4 @@ def main():
 
 
 if __name__ == "__main__":
-
-
     main()

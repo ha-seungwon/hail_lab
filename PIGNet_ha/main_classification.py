@@ -1,50 +1,36 @@
 import argparse
-
 import cv2
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import pdb
-from scipy.spatial.distance import cosine
 from PIL import Image
 from torch.autograd import Variable
 from tqdm.auto import tqdm
-from torch.utils.data import RandomSampler
 import pandas as pd
 import os
 from torchvision import transforms
 import math
-
-print("Current directory:", os.getcwd())
-
 from model_src import Classification_resnet, PIGNet_GSPonly_classification, swin
-
 import torch.nn.functional as F
-
-
 from utils import AverageMeter
 from torchvision.datasets import ImageFolder
 from functools import partial
 import torchvision
-# time.sleep(600)600
-def make_batch_fn(samples, batch_size, feature_shape):
-    return make_batch(samples, batch_size, feature_shape)
-
-
 import subprocess
 from torch.nn.functional import cosine_similarity
 import matplotlib.pyplot as plt
 import wandb
 
+def make_batch_fn(samples, batch_size, feature_shape):
+    return make_batch(samples, batch_size, feature_shape)
 
 def visualize_compared_features(compared_features):
     plt.imshow(compared_features, cmap='viridis', interpolation='nearest')
     plt.colorbar()
     plt.title('Compared Features')
     plt.show()
-
-# compared에 해당하는 특징 벡터를 시각화
 
 def compute_similarity(feature_map,labels):
     # feature_map의 shape을 가져옴
@@ -104,6 +90,109 @@ def get_cpu_temperature():
 
     return None  # in case temperature is not found
 
+def get_coords_by_distance(center_x, center_y, distance, feature_map_size_h, feature_map_size_w):
+    coords = []
+    for i in range(feature_map_size_h):
+        for j in range(feature_map_size_w):
+            dist = math.sqrt((i - center_x) ** 2 + (j - center_y) ** 2)
+            if abs(dist - distance) < 0.5:  # 거리 차이가 0.5 이내면 같은 거리로 간주
+                coords.append((i, j))
+    return coords
+
+
+# 코사인 유사도 계산 함수
+def calculate_cosine_similarity(coords, center_vector, tensor):
+    cos_sims = []
+    for (x, y) in coords:
+        vector = tensor[0, :, x, y]  # 해당 좌표의 512차원 벡터
+        cos_sim = F.cosine_similarity(center_vector, vector, dim=0)  # 코사인 유사도 계산
+        cos_sims.append(cos_sim.item())
+    return cos_sims
+
+def zoom_center(image, zoom_factor):
+    """
+    Zooms into or out of the image around the center by the given zoom_factor.
+    Keeps the image size unchanged.
+    """
+    width, height = image.size
+
+    if zoom_factor > 1:
+        # Zoom in
+        new_width = int(width / zoom_factor)
+        new_height = int(height / zoom_factor)
+
+        # Center coordinates
+        center_x, center_y = width // 2, height // 2
+
+        # Calculate the crop box
+        left = max(center_x - new_width // 2, 0)
+        right = min(center_x + new_width // 2, width)
+        top = max(center_y - new_height // 2, 0)
+        bottom = min(center_y + new_height // 2, height)
+
+        # Crop the image, then resize back to the original dimensions
+        image = image.crop((left, top, right, bottom)).resize((width, height), Image.Resampling.LANCZOS)
+
+    elif zoom_factor < 1:
+        # Zoom out
+        new_width = int(width * zoom_factor)
+        new_height = int(height * zoom_factor)
+
+        # Resize the image to the new dimensions
+        resized_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+        # Create a new white image and paste the resized image in the center
+        new_image = Image.new('RGB', (width, height), (255, 255, 255))
+        new_image.paste(resized_image, ((width - new_width) // 2, (height - new_height) // 2))
+
+        image = new_image
+
+    return image
+def repeat(image, pattern_repeat_count):
+    """
+    Repeat the inner region of the image in a grid pattern.
+    pattern_repeat_count: Number of repetitions for each dimension (x, y)
+    """
+    image_size = image.size
+    numpy_image = np.array(image)
+    original_opencv_image = cv2.cvtColor(numpy_image, cv2.COLOR_RGB2BGR)
+
+    # Use the entire image as the inner region to repeat
+    inner_region = original_opencv_image
+    inner_image = Image.fromarray(cv2.cvtColor(inner_region, cv2.COLOR_BGR2RGB))
+    inner_image_resize = inner_image.resize((image_size[0], image_size[1]))
+
+    # Create a new empty image of size (image_size[0] * repeat_count, image_size[1] * repeat_count)
+    new_image_size = (image_size[0] * pattern_repeat_count, image_size[1] * pattern_repeat_count)
+    new_image = Image.new('RGB', new_image_size)
+
+    # Paste the resized inner image in a grid pattern
+    for i in range(pattern_repeat_count):
+        for j in range(pattern_repeat_count):
+            new_image.paste(inner_image_resize, (i * image_size[0], j * image_size[1]))
+
+    # Resize the final repeated image back to the original image size
+    final_image = new_image.resize(image_size)
+
+    return final_image
+# Define a custom transform class for zoom
+class ZoomTransform:
+    def __init__(self, zoom_factor):
+        self.zoom_factor = zoom_factor
+
+    def __call__(self, image):
+        return zoom_center(image, self.zoom_factor)
+
+
+class RepeatTransform:
+    def __init__(self, pattern_repeat_count):
+        self.pattern_repeat_count = pattern_repeat_count
+
+    def __call__(self, image):
+        return repeat(image, self.pattern_repeat_count)
+
+
+
 
 
 parser = argparse.ArgumentParser()
@@ -143,6 +232,8 @@ parser.add_argument('--workers', type=int, default=4,
                     help='number of model loading workers')
 parser.add_argument('--model', type=str, default="deeplab",
                     help='model name')
+parser.add_argument('--process_type', type=str, default="zoom",
+                    help='process_type')
 
 args = parser.parse_args()
 def model_size(model):
@@ -182,8 +273,8 @@ def make_batch(samples, batch_size, feature_shape):
 def main():
     # make fake args
     args = argparse.Namespace()
-    args.dataset = "CIFAR-100" #CIFAR-10 CIFAR-100    imagenet
-    args.model = "Resnet" #Resnet  PIGNet_GSPonly_classification  vit_b_16  swin
+    args.dataset = "CIFAR-100" #CIFAR-10 CIFAR-100  imagenet
+    args.model = "vit_b_16" #Resnet  PIGNet_GSPonly_classification  vit_b_16  swin
     args.backbone = "resnet50"
     args.workers = 4
     args.epochs = 50
@@ -191,7 +282,7 @@ def main():
     args.train = True
     args.crop_size = 513 #513
     args.base_lr = 0.007
-    args.last_mult = 1.0
+    args.last_mult = 1.0 
     args.groups = None
     args.scratch = False
     args.freeze_bn = False
@@ -209,6 +300,7 @@ def main():
         args.device = 'cuda'
     else:
         args.device = 'cpu'
+    print("cuda available", args.device)
 
     if args.train:
         wandb.init(project='pignet_classification', name=args.model+'_'+args.backbone+ '_embed' + str(args.embedding_size) +'_nlayer' + str(args.n_layer) + '_'+args.exp,
@@ -662,16 +754,12 @@ def main():
                 correct += predicted.eq(labels).sum().item()
 
             # 텐서 크기에서 중심 좌표를 자동으로 설정 (H/2, W/2)
-            H, W = layer_outputs.shape[2], layer_outputs.shape[3]
-            center_x, center_y = H // 2, W // 2
-
-
-
+            # H, W = layer_outputs.shape[2], layer_outputs.shape[3]
+            # center_x, center_y = H // 2, W // 2
+            #
             # 중심점 feature 벡터 (512차원)
-            center_vector = layer_outputs[0, :, center_x, center_y]
-
-
-
+            # center_vector = layer_outputs[0, :, center_x, center_y]
+            #
             # 각 거리에 대해 코사인 유사도 계산
             # for distance in distances:
             #     coords = get_coords_by_distance(center_x, center_y, distance, H, W)  # 거리별 좌표 구하기
@@ -681,117 +769,13 @@ def main():
             #     distances_sum[index] += mean_cos_sim
 
 
-            accuracy = 100 * correct / total
             #for idx, model in enumerate(pixel_similarity_value):
             #    for idx_, data_ in enumerate(model):
             #        pixel_similarity_value[idx][idx_]=data_/count
+            accuracy = 100 * correct / total
             print('Accuracy: {:.2f}%'.format(accuracy))
             for i, distance in enumerate(distances):
                 print(f"Sum of Cosine similarity for distance {distance}: {distances_sum[i]/len(valid_dataset)}")
-
-
-# 유클리드 거리에 따라 일정 거리에 있는 좌표들을 찾는 함수
-def get_coords_by_distance(center_x, center_y, distance, feature_map_size_h, feature_map_size_w):
-    coords = []
-    for i in range(feature_map_size_h):
-        for j in range(feature_map_size_w):
-            dist = math.sqrt((i - center_x) ** 2 + (j - center_y) ** 2)
-            if abs(dist - distance) < 0.5:  # 거리 차이가 0.5 이내면 같은 거리로 간주
-                coords.append((i, j))
-    return coords
-
-
-# 코사인 유사도 계산 함수
-def calculate_cosine_similarity(coords, center_vector, tensor):
-    cos_sims = []
-    for (x, y) in coords:
-        vector = tensor[0, :, x, y]  # 해당 좌표의 512차원 벡터
-        cos_sim = F.cosine_similarity(center_vector, vector, dim=0)  # 코사인 유사도 계산
-        cos_sims.append(cos_sim.item())
-    return cos_sims
-
-def zoom_center(image, zoom_factor):
-    """
-    Zooms into or out of the image around the center by the given zoom_factor.
-    Keeps the image size unchanged.
-    """
-    width, height = image.size
-
-    if zoom_factor > 1:
-        # Zoom in
-        new_width = int(width / zoom_factor)
-        new_height = int(height / zoom_factor)
-
-        # Center coordinates
-        center_x, center_y = width // 2, height // 2
-
-        # Calculate the crop box
-        left = max(center_x - new_width // 2, 0)
-        right = min(center_x + new_width // 2, width)
-        top = max(center_y - new_height // 2, 0)
-        bottom = min(center_y + new_height // 2, height)
-
-        # Crop the image, then resize back to the original dimensions
-        image = image.crop((left, top, right, bottom)).resize((width, height), Image.Resampling.LANCZOS)
-
-    elif zoom_factor < 1:
-        # Zoom out
-        new_width = int(width * zoom_factor)
-        new_height = int(height * zoom_factor)
-
-        # Resize the image to the new dimensions
-        resized_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-
-        # Create a new white image and paste the resized image in the center
-        new_image = Image.new('RGB', (width, height), (255, 255, 255))
-        new_image.paste(resized_image, ((width - new_width) // 2, (height - new_height) // 2))
-
-        image = new_image
-
-    return image
-def repeat(image, pattern_repeat_count):
-    """
-    Repeat the inner region of the image in a grid pattern.
-    pattern_repeat_count: Number of repetitions for each dimension (x, y)
-    """
-    image_size = image.size
-    numpy_image = np.array(image)
-    original_opencv_image = cv2.cvtColor(numpy_image, cv2.COLOR_RGB2BGR)
-
-    # Use the entire image as the inner region to repeat
-    inner_region = original_opencv_image
-    inner_image = Image.fromarray(cv2.cvtColor(inner_region, cv2.COLOR_BGR2RGB))
-    inner_image_resize = inner_image.resize((image_size[0], image_size[1]))
-
-    # Create a new empty image of size (image_size[0] * repeat_count, image_size[1] * repeat_count)
-    new_image_size = (image_size[0] * pattern_repeat_count, image_size[1] * pattern_repeat_count)
-    new_image = Image.new('RGB', new_image_size)
-
-    # Paste the resized inner image in a grid pattern
-    for i in range(pattern_repeat_count):
-        for j in range(pattern_repeat_count):
-            new_image.paste(inner_image_resize, (i * image_size[0], j * image_size[1]))
-
-    # Resize the final repeated image back to the original image size
-    final_image = new_image.resize(image_size)
-
-    return final_image
-# Define a custom transform class for zoom
-class ZoomTransform:
-    def __init__(self, zoom_factor):
-        self.zoom_factor = zoom_factor
-
-    def __call__(self, image):
-        return zoom_center(image, self.zoom_factor)
-
-
-class RepeatTransform:
-    def __init__(self, pattern_repeat_count):
-        self.pattern_repeat_count = pattern_repeat_count
-
-    def __call__(self, image):
-        return repeat(image, self.pattern_repeat_count)
-
 
 
 
