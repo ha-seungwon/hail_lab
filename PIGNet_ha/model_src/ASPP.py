@@ -221,7 +221,7 @@ class ResNet(nn.Module):
         if 'embedding_size' in kwargs:
             self.embedding_size = kwargs['embedding_size']
         else:
-            self.embedding_size = 21 # From WJM's code
+            self.embedding_size = 21
         if 'n_layer' in kwargs:
             self.n_layer = kwargs['n_layer']
         else:

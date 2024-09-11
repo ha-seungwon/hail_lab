@@ -205,7 +205,7 @@ class GSP(nn.Module):
 
         self.edge_index = None
         self.graph_data = None
-        self.grid_size = 14  #feature map size  33 for pascal   8 for cifar-100  14 for imagenet
+        self.grid_size =  14  #feature map size  33 for pascal   8 for cifar-100  14 for imagenet
 
         self.gelu = nn.GELU()
 
@@ -311,9 +311,6 @@ class GSP(nn.Module):
                                                feature_shape=(self.embedding_size, self.grid_size, self.grid_size)))
             #gsp_layer_outputs.append(self.graph2feature(x, num_nodes=(self.grid_size ** 2),feature_shape=(self.embedding_size, self.grid_size, self.grid_size)))
 
-        # for i in x_s_f:
-        #     print(i.size())
-
         output = torch.cat(x_s_f, dim=1)
 
         # Decoder
@@ -399,14 +396,15 @@ class ResNet(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         self.layer1 = self._make_layer(block,  64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2) # stirde 2 for imagene
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2) # stirde 2 for imagenet
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2) # stirde 2 for imagene stride 1 for cifar
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2) # stirde 2 for imagenet stride 1 for cifar
         self.layer4 = self._make_layer(block, 512, layers[3], stride=1,dilation=2)
         # remove require_grad for self.layer4
         for param in self.layer4.parameters():
             param.requires_grad = False
 
         # self.pyramid_gnn = GSP(num_classes, 256 * block.expansion, self.embedding_size, self.n_layer, n_skip_l = self.n_skip_l) # 512 * block.expansion for pascal
+        print(num_classes, block.expansion, self.embedding_size, self.n_layer)
         self.pyramid_gnn = GSP(num_classes, 256 * block.expansion, self.embedding_size, self.n_layer, n_skip_l = self.n_skip_l) # 512 * block.expansion for pascal
         #num_classes, depth, embedding_size, n_layer, norm=nn.BatchNorm2d, n_skip_l =
         self.global_avg_pool = nn.AdaptiveAvgPool2d((1, 1))

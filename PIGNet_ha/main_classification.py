@@ -273,13 +273,13 @@ def make_batch(samples, batch_size, feature_shape):
 def main():
     # make fake args
     args = argparse.Namespace()
-    args.dataset = "CIFAR-100" #CIFAR-10 CIFAR-100  imagenet
-    args.model = "vit_b_16" #Resnet  PIGNet_GSPonly_classification  vit_b_16  swin
-    args.backbone = "resnet50"
+    args.dataset = "imagenet" #CIFAR-10 CIFAR-100  imagenet
+    args.model = "PIGNet_GSPonly_classification" #Resnet  PIGNet_GSPonly_classification  vit_b_16  swin
+    args.backbone = "resnet101"
     args.workers = 4
     args.epochs = 50
     args.batch_size = 8
-    args.train = True
+    args.train = False
     args.crop_size = 513 #513
     args.base_lr = 0.007
     args.last_mult = 1.0 
@@ -295,11 +295,16 @@ def main():
     args.n_layer = 6
     args.n_skip_l = 2 #2
     args.process_type = "zoom"  #zoom overlap repeat None
+    #pattern_repeat_count = 2
+    zoom_factor = 1.5
+
     # if is cuda available device
     if torch.cuda.is_available():
         args.device = 'cuda'
     else:
         args.device = 'cpu'
+
+    print("ags",args.model,args.dataset)
     print("cuda available", args.device)
 
     if args.train:
@@ -328,21 +333,29 @@ def main():
                 transforms.ToTensor(),  # Convert image to tensor
             ])
         else:
-            zoom_factor = 1.2
-            # Define transformations
-            transform = transforms.Compose([
-                transforms.Resize((image_size, image_size)),  # Resize to fixed size
-                ZoomTransform(zoom_factor),  # Apply the zoom transformation
-                transforms.ToTensor(),  # Convert image to tensor
-            ])
-            # pattern_repeat_count = 2
-            #
-            # # Define transformations
-            # transform = transforms.Compose([
-            #     transforms.Resize((image_size, image_size)),  # Resize to fixed size
-            #     RepeatTransform(pattern_repeat_count),  # Apply the repeat transformation
-            #     transforms.ToTensor(),  # Convert image to tensor
-            # ])
+            if args.process_type==None:
+                transform = transforms.Compose([
+                    transforms.Resize((image_size, image_size)),  # Resize to fixed size
+                    transforms.ToTensor(),  # Convert image to tensor
+                ])
+            else:
+                if args.process_type == 'zoom':
+                    # Define transformations
+                    transform = transforms.Compose([
+                        transforms.Resize((image_size, image_size)),  # Resize to fixed size
+                        ZoomTransform(zoom_factor),  # Apply the zoom transformation
+                        transforms.ToTensor(),  # Convert image to tensor
+                    ])
+                elif args.process_type =='repeat':
+
+
+
+                    # Define transformations
+                    transform = transforms.Compose([
+                        transforms.Resize((image_size, image_size)),  # Resize to fixed size
+                        RepeatTransform(pattern_repeat_count),  # Apply the repeat transformation
+                        transforms.ToTensor(),  # Convert image to tensor
+                    ])
 
         # Load datasets with ImageFolder and apply transformations
         dataset = ImageFolder(root=f'{data_dir}/train', transform=transform)
@@ -372,12 +385,29 @@ def main():
                 transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))  # 이미지를 정규화합니다.
             ])
         else:
-            zoom_factor = 1.5
-            transform = transforms.Compose([
-                ZoomTransform(zoom_factor),  # Apply the zoom transformation
-                transforms.ToTensor(),
-                transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))  # 이미지를 정규화합니다.
-            ])
+            if args.process_type==None:
+                print("original data")
+                transform = transforms.Compose([
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))  # 이미지를 정규화합니다.
+                ])
+            else:
+                if args.process_type == 'zoom':
+                    transform = transforms.Compose([
+                        ZoomTransform(zoom_factor),  # Apply the zoom transformation
+                        transforms.ToTensor(),
+                        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))  # 이미지를 정규화합니다.
+                    ])
+                elif args.process_type == 'repeat':
+
+
+
+                    # Define transformations
+                    transform = transforms.Compose([
+                        transforms.Resize((image_size, image_size)),  # Resize to fixed size
+                        RepeatTransform(pattern_repeat_count),  # Apply the repeat transformation
+                        transforms.ToTensor(),  # Convert image to tensor
+                    ])
 
 
 
@@ -407,35 +437,6 @@ def main():
                            'lawn-mower', 'rocket', 'streetcar', 'tank', 'tractor' # vehicles 2
                           ])
     elif args.dataset == 'CIFAR-10':
-        # Define the desired size
-        desired_size = 128
-        image_size = 32
-
-        # Calculate the padding needed for zoom out
-        padding_zoom_out = (desired_size - 32) // 2
-
-        # Define the transformation pipeline for zoom in and zoom out
-        transform_zoom_in = transforms.Compose([
-            transforms.Resize((int(desired_size * 2), int(desired_size * 2))),  # Slight enlargement
-            transforms.CenterCrop(desired_size) ,
-            transforms.ToTensor()# Crop to desired size
-        ])
-
-        transform_zoom_in_target = transforms.Compose([
-            transforms.Resize(desired_size),  # Resize to desired size
-            transforms.CenterCrop(desired_size),  # Crop to desired size
-            transforms.ToTensor()  # Convert to tensor
-        ])
-
-        transform_zoom_out = transforms.Compose([
-            transforms.Pad(padding_zoom_out, fill=0, padding_mode='constant'),  # Pad the image with zeros
-            transforms.Resize((desired_size, desired_size)),
-            transforms.ToTensor()# Resize to desired size
-        ])
-
-        # Rest of your code remains the same, you can apply the desired transformation based on your requirement
-        #transform = transform_zoom_in
-        #transform_target = transform_zoom_in_target
 
         transform = transforms.Compose([
             transforms.ToTensor()])
@@ -745,9 +746,22 @@ def main():
             distances_sum= [ 0 for _ in range(len(distances))]
 
             for i, (inputs, labels) in enumerate(tqdm(valid_dataset)):
+                #
+                # import matplotlib.pyplot as plt
+                # input_image = inputs.squeeze(0).detach().cpu().numpy().transpose(1, 2, 0)
+                # plt.figure(figsize=(6, 6))
+                # plt.imshow(input_image)  # 원본 데이터 그대로 출력 (float32 지원)
+                # plt.title('Input Image (Original)')
+                # plt.axis('off')
+                # plt.show()
+
+
                 inputs = inputs.to(args.device)
                 labels = torch.tensor(labels).to(args.device)
                 outputs, layer_outputs = model(inputs)
+
+
+
                 _, predicted = outputs.max(1)
 
                 total += labels.size(0)

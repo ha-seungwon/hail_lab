@@ -143,12 +143,12 @@ def main():
     # make fake args
     args = argparse.Namespace()
     args.dataset = "pascal"
-    args.model = "Mask2Former" #PIGNet_GSPonly  Mask2Former ASPP
+    args.model = "PIGNet_GSPonly" #PIGNet_GSPonly  Mask2Former ASPP
     args.backbone = "resnet101"
     args.workers = 1
     args.epochs = 50
     args.batch_size = 16
-    args.train = True
+    args.train = False
     args.crop_size = 512
     args.base_lr = 0.007
     args.last_mult = 1.0
@@ -160,10 +160,13 @@ def main():
     args.resume = None
     args.exp = "bn_lr7e-3"
     args.gpu = 0
-    args.embedding_size = 21
+    args.embedding_size = 512
     args.n_layer = 8
     args.n_skip_l = 2
-    args.process_type = None
+    args.process_type = "repeat"  # None zoom, overlap, repeat
+    zoom_factor = 0.1 # zoom in, out value 양수면 줌 음수면 줌아웃
+    overlap_percentage = 0.7 #겹치는 비율 0~1 사이 값으로 0.8 이상이면 shape 이 안맞음
+    pattern_repeat_count = 2 # 반복 횟수 2이면 2*2
 
 
     # if is cuda available device
@@ -189,13 +192,18 @@ def main():
             valid_dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
                                             train=not (args.train), crop_size=args.crop_size)
         else:
-            zoom_factor = 0.5  # zoom in, out value 양수면 줌 음수면 줌아웃
-            overlap_percentage = 0.3
-            pattern_repeat_count = 3
+
             if args.process_type != None:
-                valid_dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
+                print(args.process_type)
+                dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
                                                 train=args.train, crop_size=args.crop_size,
                                                 process=args.process_type, process_value=zoom_factor,
+                                                overlap_percentage=overlap_percentage,
+                                                pattern_repeat_count=pattern_repeat_count)
+            else:
+                dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
+                                                train=args.train, crop_size=args.crop_size,
+                                                process=None, process_value=zoom_factor,
                                                 overlap_percentage=overlap_percentage,
                                                 pattern_repeat_count=pattern_repeat_count)
 
@@ -441,17 +449,39 @@ def main():
 
         feature_shape = (2048, 33, 33)
         valid_dataset_loader = torch.utils.data.DataLoader(
-            valid_dataset, batch_size=args.batch_size, shuffle=False,
+            dataset, batch_size=args.batch_size, shuffle=False,
             pin_memory=True, num_workers=args.workers,
             collate_fn=lambda samples: make_batch(samples, args.batch_size, feature_shape))
-
+        skip_count=0
         distances = [1, 2, 3, 4]
         distances_sum = [0 for _ in range(len(distances))]
         for i in tqdm(range(len(valid_dataset_loader))):
             inputs, target = dataset[i]
+            if inputs==None:
+                skip_count+=1
+                continue #overlap,repeat algorithm fail images
+            import matplotlib.pyplot as plt
+            input_image = inputs.squeeze(0).detach().cpu().numpy().transpose(1, 2, 0)
+            plt.figure(figsize=(6, 6))
+            plt.imshow(input_image)  # 원본 데이터 그대로 출력 (float32 지원)
+            plt.title('Input Image (Original)')
+            plt.axis('off')
+            plt.show()
+
+            output_image = target.detach().cpu().numpy()  # GPU에서 CPU로 이동 후 numpy로 변환
+
+            # 출력 시각화
+            plt.figure(figsize=(6, 6))
+            plt.imshow(output_image)  # 원본 데이터 그대로 출력 (float32 지원)
+            plt.title('Output Image (Original)')
+            plt.axis('off')
+            plt.show()
+
+
+            input_image = inputs.squeeze(0).cpu()
             inputs = Variable(inputs.to(args.device))
-            #outputs = model(inputs.unsqueeze(0))
-            outputs, layer_outputs = model(inputs.unsqueeze(0))
+            outputs = model(inputs.unsqueeze(0))
+            #outputs, layer_outputs = model(inputs.unsqueeze(0))
             _, pred = torch.max(outputs, 1)
             pred = pred.data.cpu().numpy().squeeze().astype(np.uint8)
             mask = target.numpy().astype(np.uint8)
@@ -487,7 +517,7 @@ def main():
         #    for idx_, data_ in enumerate(model):
         #        pixel_similarity_value[idx][idx_]=data_/count
         for i, distance in enumerate(distances):
-            print(f"Sum of Cosine similarity for distance {distance}: {distances_sum[i] / len(valid_dataset)}")
+            print(f"Sum of Cosine similarity for distance {distance}: {distances_sum[i] / len(dataset)-skip_count}")
 
         iou = inter_meter.sum / (union_meter.sum + 1e-10)
         for i, val in enumerate(iou):

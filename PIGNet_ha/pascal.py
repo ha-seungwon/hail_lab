@@ -66,20 +66,26 @@ class VOCSegmentation(data.Dataset):
       _img, _target = self.zoom_center(_img, _target, self.process_value)
 
     elif self.process == 'overlap' and index < len(self.images) - 1:
+
       next_img=Image.open(self.images[index+1]).convert('RGB')
       next_target=Image.open(self.masks[index+1])
       _img, _target = self.overlap(_img, _target,next_img,next_target,self.overlap_percentage)
+      if _img==None:
+        return None,None
 
 
     elif self.process == 'repeat':
       _img, _target = self.repeat(_img, _target,self.pattern_repeat_count)
+      if _img==None:
+        return None,None
 
 
-    if self.process == None:
-      _img, _target = preprocess(_img, _target,
-                                 flip=True if self.train else False,
-                                 scale=(0.5, 2.0) if self.train else None,
-                                 crop=(self.crop_size, self.crop_size))
+
+    #if self.process == None:
+    _img, _target = preprocess(_img, _target,
+                               flip=True if self.train else False,
+                               scale=(0.5, 2.0) if self.train else None,
+                               crop=(self.crop_size, self.crop_size))
     if self.transform is not None:
       _img = self.transform(_img)
 
