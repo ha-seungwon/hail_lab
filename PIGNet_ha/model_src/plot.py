@@ -54,7 +54,7 @@ def seg_overlap_plot():
 
 def seg_repeat_plot():
     # 반복 횟수 (X축 값)
-    repeat_levels = [3, 6, 9, 12]
+    repeat_levels = [0.25,0.11, 0.06 ,0.02] # 2 번,3번,4번,6번 counter 증가
 
     # 각 모델에 대한 repeat 성능 데이터 (Y축 값)
     pignet101_repeat = [16.86, 8.83, 3.65, 3.66]

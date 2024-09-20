@@ -22,7 +22,7 @@ import subprocess
 from torch.nn.functional import cosine_similarity
 import matplotlib.pyplot as plt
 import wandb
-
+from vit_pytorch import ViT
 def make_batch_fn(samples, batch_size, feature_shape):
     return make_batch(samples, batch_size, feature_shape)
 
@@ -273,13 +273,13 @@ def make_batch(samples, batch_size, feature_shape):
 def main():
     # make fake args
     args = argparse.Namespace()
-    args.dataset = "imagenet" #CIFAR-10 CIFAR-100  imagenet
-    args.model = "PIGNet_GSPonly_classification" #Resnet  PIGNet_GSPonly_classification  vit_b_16  swin
-    args.backbone = "resnet101"
+    args.dataset = "CIFAR-10" #CIFAR-10 CIFAR-100  imagenet
+    args.model = "vit" #Resnet  PIGNet_GSPonly_classification  vit  swin
+    args.backbone = "resnet50"
     args.workers = 4
     args.epochs = 50
     args.batch_size = 8
-    args.train = False
+    args.train = True
     args.crop_size = 513 #513
     args.base_lr = 0.007
     args.last_mult = 1.0 
@@ -291,12 +291,12 @@ def main():
     args.resume = None
     args.exp = "bn_lr7e-3"
     args.gpu = 0
-    args.embedding_size = 512
+    args.embedding_size = 256
     args.n_layer = 6
     args.n_skip_l = 2 #2
     args.process_type = "zoom"  #zoom overlap repeat None
     #pattern_repeat_count = 2
-    zoom_factor = 1.5
+    zoom_factor =2
 
     # if is cuda available device
     if torch.cuda.is_available():
@@ -308,7 +308,7 @@ def main():
     print("cuda available", args.device)
 
     if args.train:
-        wandb.init(project='pignet_classification', name=args.model+'_'+args.backbone+ '_embed' + str(args.embedding_size) +'_nlayer' + str(args.n_layer) + '_'+args.exp,
+        wandb.init(project='pignet_classification', name=args.model+'_'+args.backbone+ '_embed' + str(args.embedding_size) +'_nlayer' + str(args.n_layer) + '_'+args.exp+'_'+str(args.dataset),
                     config=args.__dict__)
 
     loss_data = pd.DataFrame(columns=["train_loss"])
@@ -316,9 +316,12 @@ def main():
 
     # assert torch.cuda.is_available()
     torch.backends.cudnn.benchmark = True
-
-    model_fname = 'model/classification_{0}_{1}_{2}_v3.pth'.format(
-        args.model,args.backbone, args.dataset)
+    if args.model=='vit':
+        model_fname = 'model/classification_{0}_{1}_v3.pth'.format(
+            args.model, args.dataset)
+    else:
+        model_fname = 'model/classification_{0}_{1}_{2}_v3.pth'.format(
+            args.model,args.backbone, args.dataset)
 
     if args.dataset == 'imagenet':
         # 데이터셋 경로 및 변환 정의
@@ -437,7 +440,7 @@ def main():
                            'lawn-mower', 'rocket', 'streetcar', 'tank', 'tractor' # vehicles 2
                           ])
     elif args.dataset == 'CIFAR-10':
-
+        image_size = 32
         transform = transforms.Compose([
             transforms.ToTensor()])
 
@@ -473,10 +476,20 @@ def main():
                 n_layer=args.n_layer,
                 n_skip_l=args.n_skip_l
                 )
-        elif args.model == 'vit_b_16':
-            print("main")
+        elif args.model == 'vit':
+            model = ViT(
+                image_size=image_size,
+                patch_size=32,
+                num_classes=len(dataset.CLASSES),
+                dim=1024,
+                depth=6,
+                heads=16,
+                mlp_dim=2048,
+                dropout=0.1,
+                emb_dropout=0.1
+            )
         elif args.model == 'swin':
-            model = swin.SwinTransformer(img_size=image_size, num_classes=len(dataset.CLASSES), window_size=4) #window_size =4 cifar   img_size=
+            model = torchvision.models.swin_t(weights=torchvision.models.Swin_T_Weights.DEFAULT)
 
     else:
 
@@ -509,7 +522,7 @@ def main():
                     m.eval()
                     m.weight.requires_grad = False
                     m.bias.requires_grad = False
-        if args.model!='swin':
+        if args.model!='swin' and args.model!='vit' :
             backbone_params = (
                         list(model.module.conv1.parameters()) +
                         list(model.module.bn1.parameters()) +
@@ -541,6 +554,11 @@ def main():
 
                 ],
                     lr=args.base_lr, momentum=0.9, weight_decay=0.0001)
+        elif args.model == 'vit':
+
+            # 백본이 아닌 나머지 파라미터만 학습 가능하게 설정
+            optimizer = optim.SGD(filter(lambda p: p.requires_grad, model.parameters()), lr=0.001, momentum=0.9,
+                                  weight_decay=0.0001)
 
         else:# swin
             last_params = list(model.module.parameters())
@@ -602,7 +620,7 @@ def main():
                 # if args.model == "deeplab":
                 inputs = Variable(inputs.to(args.device))
                 target = Variable(target.to(args.device)).long()
-                if args.model=='swin':
+                if args.model=='swin' or args.model=='vit':
                     outputs = model(inputs)
 
                 else:
@@ -689,7 +707,7 @@ def main():
                 for i, (inputs, labels) in enumerate(tqdm(valid_dataset)):
                     inputs = inputs.to(args.device)
                     labels = torch.tensor(labels).to(args.device)
-                    if args.model == 'swin':
+                    if args.model == 'swin' or args.model =='vit':
                         outputs = model(inputs)
 
                     else:
@@ -746,7 +764,7 @@ def main():
             distances_sum= [ 0 for _ in range(len(distances))]
 
             for i, (inputs, labels) in enumerate(tqdm(valid_dataset)):
-                #
+
                 # import matplotlib.pyplot as plt
                 # input_image = inputs.squeeze(0).detach().cpu().numpy().transpose(1, 2, 0)
                 # plt.figure(figsize=(6, 6))

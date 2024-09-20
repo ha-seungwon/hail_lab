@@ -145,11 +145,11 @@ def main():
     args.dataset = "pascal"
     args.model = "PIGNet_GSPonly" #PIGNet_GSPonly  Mask2Former ASPP
     args.backbone = "resnet101"
-    args.workers = 1
+    args.workers = 4
     args.epochs = 50
     args.batch_size = 16
     args.train = False
-    args.crop_size = 512
+    args.crop_size = 513
     args.base_lr = 0.007
     args.last_mult = 1.0
     args.groups = None
@@ -160,10 +160,12 @@ def main():
     args.resume = None
     args.exp = "bn_lr7e-3"
     args.gpu = 0
-    args.embedding_size = 512
+    args.embedding_size = 21
     args.n_layer = 8
     args.n_skip_l = 2
-    args.process_type = "repeat"  # None zoom, overlap, repeat
+
+
+    args.process_type = 'zoom'  # None zoom, overlap, repeat
     zoom_factor = 0.1 # zoom in, out value 양수면 줌 음수면 줌아웃
     overlap_percentage = 0.7 #겹치는 비율 0~1 사이 값으로 0.8 이상이면 shape 이 안맞음
     pattern_repeat_count = 2 # 반복 횟수 2이면 2*2
@@ -182,7 +184,7 @@ def main():
     torch.backends.cudnn.benchmark = True
 
     model_fname = 'model/{0}_{1}_{2}_v3.pth'.format(
-        args.model,args.backbone, args.dataset)
+        args.model,args.backbone, args.dataset,args.embedding_size)
 
     if args.dataset == 'pascal':
         if args.train:
@@ -191,6 +193,7 @@ def main():
                                       train=args.train, crop_size=args.crop_size)
             valid_dataset = VOCSegmentation('C:/Users/hail/Desktop/ha/data/ADE/VOCdevkit',
                                             train=not (args.train), crop_size=args.crop_size)
+
         else:
 
             if args.process_type != None:
@@ -256,41 +259,28 @@ def main():
         if args.freeze_bn:
             for m in model.modules():
                 if isinstance(m, nn.BatchNorm2d):
+                    print("12345")
                     m.eval()
                     m.weight.requires_grad = False
                     m.bias.requires_grad = False
-        if args.model!="Mask2Former" :
-            backbone_params = (
-                        list(model.module.conv1.parameters()) +
-                        list(model.module.bn1.parameters()) +
-                        list(model.module.layer1.parameters()) +
-                        list(model.module.layer2.parameters()) +
-                        list(model.module.layer3.parameters()) +
-                        list(model.module.layer4.parameters()))
-            if args.model == "PIGNet_GSPonly":
-                last_params = list(model.module.pyramid_gnn.parameters())
-            else:
 
-                last_params = list(model.module.aspp.parameters())
-            optimizer = optim.SGD([
-                {'params': filter(lambda p: p.requires_grad, backbone_params)},
-                {'params': filter(lambda p: p.requires_grad, last_params)}
+        backbone_params = (
+                list(model.module.conv1.parameters()) +
+                list(model.module.bn1.parameters()) +
+                list(model.module.layer1.parameters()) +
+                list(model.module.layer2.parameters()) +
+                list(model.module.layer3.parameters()) +
+                list(model.module.layer4.parameters()))
+        if args.model == "PIGNet_GSPonly":
+            last_params = list(model.module.pyramid_gnn.parameters())
 
-            ],
-                lr=args.base_lr, momentum=0.9, weight_decay=0.0001)
-        else:
-            if args.model =='Mask2Former':
-                last_params = list(model.module.pixel_decoder.parameters())
-                last_params_ = list(model.module.transformer_decoder.parameters())
-            optimizer = optim.SGD([
-                {'params': filter(lambda p: p.requires_grad,last_params )},
-                {'params': filter(lambda p: p.requires_grad, last_params_)}
-                                   ],lr=args.base_lr, momentum=0.9, weight_decay=0.0001)
+        optimizer = optim.SGD([
+            {'params': filter(lambda p: p.requires_grad, backbone_params)},
+            {'params': filter(lambda p: p.requires_grad, last_params)}
 
-
-
-        feature_shape = (2048,33,33)
-
+        ],
+            lr=args.base_lr, momentum=0.9, weight_decay=0.0001)
+        feature_shape = (2048, 33, 33)
 
         collate_fn = partial(make_batch_fn, batch_size=args.batch_size, feature_shape=feature_shape)
 
@@ -299,6 +289,7 @@ def main():
             batch_size=args.batch_size,
             shuffle=args.train,
             pin_memory=True,
+            num_workers=args.workers,
             collate_fn=collate_fn
         )
 
@@ -318,14 +309,13 @@ def main():
             else:
                 print('=> no checkpoint found at {0}'.format(args.resume))
 
-
         best_loss = 1e+10
         patience = 0
 
         train_step = 0
 
         for epoch in range(start_epoch, args.epochs):
-            print("EPOCHS : ", epoch+1," / ",args.epochs)
+            print("EPOCHS : ", epoch + 1, " / ", args.epochs)
 
             loss_sum = 0
             cnt = 0
@@ -333,43 +323,44 @@ def main():
             for inputs, target in tqdm(iter(dataset_loader)):
                 log = {}
                 cur_iter = epoch * len(dataset_loader) + cnt
-
-
                 lr = args.base_lr * (1 - float(cur_iter) / max_iter) ** 0.9
                 optimizer.param_groups[0]['lr'] = lr
+                # if args.model == "deeplab":
                 optimizer.param_groups[1]['lr'] = lr * args.last_mult
-
                 inputs = Variable(inputs.to(args.device))
                 target = Variable(target.to(args.device)).long()
-
-
-
-                outputs = model(inputs)#.float()
+                outputs = model(inputs).float()
                 loss = criterion(outputs, target)
                 if np.isnan(loss.item()) or np.isinf(loss.item()):
                     pdb.set_trace()
                 losses.update(loss.item(), args.batch_size)
                 loss_sum += loss.item()
                 loss.backward()
-                #print('batch_loss: {:.5f}'.format(loss))
+                print('batch_loss: {:.5f}'.format(loss))
 
                 log['train/batch/loss'] = loss.to('cpu')
+                # log['train/temp'] = get_cpu_temperature()
 
-                cnt+=1
+                cnt += 1
                 train_step += 1
 
                 optimizer.step()
                 optimizer.zero_grad()
 
+                # if train_step % 30 == 0:
+                #     time.sleep(15)
 
-            loss_avg = loss_sum/len(dataset_loader)
+            loss_avg = loss_sum / len(dataset_loader)
             log['train/epoch/loss'] = loss_avg
+            # wandb.log(log) but with timestep train_step
+
+            # wandb.log(log)
 
             loss_list.append(loss_avg)
             print('epoch: {0}\t'
                   'lr: {1:.6f}\t'
                   'loss: {2:.4f}'.format(
-                epoch + 1, lr,loss_avg))
+                epoch + 1, lr, loss_avg))
 
             if best_loss > loss_avg:
                 best_loss = loss_avg
@@ -382,11 +373,12 @@ def main():
                 }, model_fname)
                 print("model save complete!!!")
             else:
-                patience +=1
-                print("patience : ",patience)
+                patience += 1
+                print("patience : ", patience)
 
                 if patience > 50:
                     break
+            # time.sleep(150)
             print("Evaluating !!! ")
 
             inter_meter = AverageMeter()
@@ -397,15 +389,13 @@ def main():
                 losses_test = 0.0
                 log = {}
                 for i in tqdm(range(len(valid_dataset))):
-
                     inputs, target = valid_dataset[i]
                     inputs = Variable(inputs.to(args.device))
                     target = Variable(target.to(args.device)).long()
-                    outputs = model(inputs.unsqueeze(0))#.float()
+                    outputs = model(inputs.unsqueeze(0)).float()
                     _, pred = torch.max(outputs, 1)
                     pred = pred.data.cpu().numpy().squeeze().astype(np.uint8)
                     mask = target.cpu().numpy().astype(np.uint8)
-
 
                     inter, union = inter_and_union(pred, mask, len(valid_dataset.CLASSES))
                     inter_meter.update(inter)
@@ -415,7 +405,6 @@ def main():
                     loss = criterion(outputs, target.unsqueeze(0))
                     # add to losses_test
                     losses_test += loss.item()
-
 
                     # log['test/batch/loss'] = loss.to('cpu')
                     # log['test/batch/iou'] = (inter.sum() / (union.sum() + 1e-10))
@@ -432,7 +421,7 @@ def main():
                 log['test/epoch/iou'] = miou.item()
             # time.sleep(60)
             model.train()
-    else: #evaluating
+    else:
         print("Evaluating !!! ")
         torch.cuda.set_device(args.gpu)
         model = model.to(args.device)
@@ -440,6 +429,7 @@ def main():
         checkpoint = torch.load(model_fname)
 
         state_dict = {k[7:]: v for k, v in checkpoint['state_dict'].items() if 'tracked' not in k}
+        print(model_fname)
         model.load_state_dict(state_dict)
         cmap = loadmat('C:/Users/hail/Desktop/ha/data/ADE/pascal_seg_colormap.mat')['colormap']
         cmap = (cmap * 255).astype(np.uint8).flatten().tolist()
@@ -448,40 +438,19 @@ def main():
         union_meter = AverageMeter()
 
         feature_shape = (2048, 33, 33)
-        valid_dataset_loader = torch.utils.data.DataLoader(
+        dataset_loader = torch.utils.data.DataLoader(
             dataset, batch_size=args.batch_size, shuffle=False,
             pin_memory=True, num_workers=args.workers,
             collate_fn=lambda samples: make_batch(samples, args.batch_size, feature_shape))
-        skip_count=0
-        distances = [1, 2, 3, 4]
-        distances_sum = [0 for _ in range(len(distances))]
-        for i in tqdm(range(len(valid_dataset_loader))):
+
+
+
+        for i in tqdm(range(len(dataset))):
             inputs, target = dataset[i]
-            if inputs==None:
-                skip_count+=1
-                continue #overlap,repeat algorithm fail images
-            import matplotlib.pyplot as plt
-            input_image = inputs.squeeze(0).detach().cpu().numpy().transpose(1, 2, 0)
-            plt.figure(figsize=(6, 6))
-            plt.imshow(input_image)  # 원본 데이터 그대로 출력 (float32 지원)
-            plt.title('Input Image (Original)')
-            plt.axis('off')
-            plt.show()
-
-            output_image = target.detach().cpu().numpy()  # GPU에서 CPU로 이동 후 numpy로 변환
-
-            # 출력 시각화
-            plt.figure(figsize=(6, 6))
-            plt.imshow(output_image)  # 원본 데이터 그대로 출력 (float32 지원)
-            plt.title('Output Image (Original)')
-            plt.axis('off')
-            plt.show()
 
 
-            input_image = inputs.squeeze(0).cpu()
             inputs = Variable(inputs.to(args.device))
             outputs = model(inputs.unsqueeze(0))
-            #outputs, layer_outputs = model(inputs.unsqueeze(0))
             _, pred = torch.max(outputs, 1)
             pred = pred.data.cpu().numpy().squeeze().astype(np.uint8)
             mask = target.numpy().astype(np.uint8)
@@ -493,31 +462,11 @@ def main():
             elif args.dataset == 'cityscapes':
                 mask_pred.save(os.path.join('data/cityscapes_val', imname))
 
+            # print('eval: {0}/{1}'.format(i + 1, len(dataset)))
+
             inter, union = inter_and_union(pred, mask, len(dataset.CLASSES))
             inter_meter.update(inter)
             union_meter.update(union)
-
-
-            # 텐서 크기에서 중심 좌표를 자동으로 설정 (H/2, W/2)
-            # H, W = layer_outputs.shape[2], layer_outputs.shape[3]
-            # center_x, center_y = H // 2, W // 2
-            #
-            # 중심점 feature 벡터 (512차원)
-            # center_vector = layer_outputs[0, :, center_x, center_y]
-            #
-            # 각 거리에 대해 코사인 유사도 계산
-            # for distance in distances:
-            #     coords = get_coords_by_distance(center_x, center_y, distance, H, W)  # 거리별 좌표 구하기
-            #     cos_sims = calculate_cosine_similarity(coords, center_vector, layer_outputs)  # 유사도 계산
-            #     mean_cos_sim = sum(cos_sims) / len(cos_sims)  # 평균 코사인 유사도 계산
-            #     index = distances.index(distance)
-            #     distances_sum[index] += mean_cos_sim
-
-        # for idx, model in enumerate(pixel_similarity_value):
-        #    for idx_, data_ in enumerate(model):
-        #        pixel_similarity_value[idx][idx_]=data_/count
-        for i, distance in enumerate(distances):
-            print(f"Sum of Cosine similarity for distance {distance}: {distances_sum[i] / len(dataset)-skip_count}")
 
         iou = inter_meter.sum / (union_meter.sum + 1e-10)
         for i, val in enumerate(iou):
@@ -527,3 +476,22 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# 텐서 크기에서 중심 좌표를 자동으로 설정 (H/2, W/2)
+# H, W = layer_outputs.shape[2], layer_outputs.shape[3]
+# center_x, center_y = H // 2, W // 2
+#
+# 중심점 feature 벡터 (512차원)
+# center_vector = layer_outputs[0, :, center_x, center_y]
+#
+# 각 거리에 대해 코사인 유사도 계산
+# for distance in distances:
+#     coords = get_coords_by_distance(center_x, center_y, distance, H, W)  # 거리별 좌표 구하기
+#     cos_sims = calculate_cosine_similarity(coords, center_vector, layer_outputs)  # 유사도 계산
+#     mean_cos_sim = sum(cos_sims) / len(cos_sims)  # 평균 코사인 유사도 계산
+#     index = distances.index(distance)
+#     distances_sum[index] += mean_cos_sim
+
+# for idx, model in enumerate(pixel_similarity_value):
+#    for idx_, data_ in enumerate(model):
+#        pixel_similarity_value[idx][idx_]=data_/count

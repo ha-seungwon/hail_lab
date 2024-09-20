@@ -200,7 +200,7 @@ class GSP(nn.Module):
 
         self.edge_index = None
         self.graph_data = None
-        self.grid_size = 32
+        self.grid_size = 33
 
         self.gelu = nn.GELU()
 
@@ -232,7 +232,7 @@ class GSP(nn.Module):
 
         batch_size, channels, height, width = feature_map.shape
 
-        # list to store graph model for each item in the batch
+        # list to store graph data for each item in the batch
         data_list = []
 
         # iterate through the batch
@@ -248,7 +248,7 @@ class GSP(nn.Module):
             # create Data instance for this item in the batch
             data = Data(x=x, edge_index=edge_index)
 
-            # appending the model to the data_list
+            # appending the data to the data_list
             data_list.append(data)
 
         # create a batch from the data_list
@@ -297,7 +297,7 @@ class GSP(nn.Module):
             # x_s[ii] = x
             if (ii + 1) % self.n_skip_l == 0:
                 x_s_f.append(self.graph2feature(x, num_nodes=(self.grid_size ** 2),
-                                                feature_shape=(self.embedding_size, self.grid_size, self.grid_size)))
+                                                feature_shape=(self.embedding_size, 33, 33)))
 
         output = torch.cat(x_s_f, dim=1)
 
@@ -356,8 +356,8 @@ class ResNet(nn.Module):
     def __init__(self, block, layers, num_classes, num_groups=None, weight_std=False, beta=False, **kwargs):
         if 'embedding_size' in kwargs:
             self.embedding_size = kwargs['embedding_size']
-
-
+        else:
+            self.embedding_size = 21  # From WJM's code
         if 'n_layer' in kwargs:
             self.n_layer = kwargs['n_layer']
         else:
