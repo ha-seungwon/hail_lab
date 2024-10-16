@@ -319,11 +319,11 @@ def resnet50(pretrained=False, num_groups=None, weight_std=False, **kwargs):
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
     model = ResNet(Bottleneck, [3, 4, 6, 3], **kwargs)
-    """model = ResNet(Bottleneck, [3, 4, 6, 3], **kwargs)
+    # model = ResNet(Bottleneck, [3, 4, 6, 3], **kwargs)
 
-    if pretrained:
-        model.load_state_dict(model_zoo.load_url(model_urls['resnet50']))
-    return model"""
+    # if pretrained:
+    #     model.load_state_dict(model_zoo.load_url(model_urls['resnet50']))
+    #     return model
     if pretrained:
         print("Pretrained!!")
         model_dict = model.state_dict()

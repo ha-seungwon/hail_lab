@@ -99,8 +99,8 @@ class blockSAGEsq(nn.Module):
         super(blockSAGEsq,self).__init__()
         self.hidden = int(hidden)
         self.inner  = int(inner)
-        self.sage1 = SAGEConv(self.hidden, self.hidden, aggregator = 'pool')
-        self.sage2 = SAGEConv(self.hidden, self.hidden, aggregator = 'pool')
+        self.sage1 = SAGEConv(self.hidden, self.hidden)
+        self.sage2 = SAGEConv(self.hidden, self.hidden)
 
         # self.sage1 = SAGEConv(self.hidden, self.hidden, aggregator='gcn')
         # self.sage2 = SAGEConv(self.hidden, self.hidden, aggregator='gcn')
@@ -285,13 +285,11 @@ class GSP(nn.Module):
         # Encoder
         x_origin = x
 
-
         x = self.convg(x)
         x = self.convg_bn(x)
         x = self.gelu(x)
         gsp_layer_input = x
         x_s_f = [x]
-
 
 
         edge_idx = self.edge(self.grid_size)
@@ -312,14 +310,12 @@ class GSP(nn.Module):
             #gsp_layer_outputs.append(self.graph2feature(x, num_nodes=(self.grid_size ** 2),feature_shape=(self.embedding_size, self.grid_size, self.grid_size)))
 
         output = torch.cat(x_s_f, dim=1)
-
         # Decoder
         #x = self.decoder(x)
         # x = self.convx(output)
 
         # Output
         x = self.conv2(output)
-
         return x #,gsp_layer_outputs
 
 class Bottleneck(nn.Module):

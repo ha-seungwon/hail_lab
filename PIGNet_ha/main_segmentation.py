@@ -15,14 +15,13 @@ from tqdm.auto import tqdm
 from torchvision import transforms
 from torch.utils.data import RandomSampler
 import pandas as pd
-from model_src import PIGNet_GSPonly, ASPP
-from model_src.Mask2Former import Mask2Former
-# from Mask2Former import Mask2Former
+from model_src import PIGNet_GSPonly, ASPP, PIGNet
+#from model_src.Mask2Former import Mask2Former
 from pascal import VOCSegmentation
 from utils import AverageMeter, inter_and_union
 from functools import partial
 import subprocess
-
+import wandb
 
 def make_batch_fn(samples, batch_size, feature_shape):
     return make_batch(samples, batch_size, feature_shape)
@@ -143,8 +142,8 @@ def main():
     # make fake args
     args = argparse.Namespace()
     args.dataset = "pascal"
-    args.model = "PIGNet_GSPonly" #PIGNet_GSPonly  Mask2Former ASPP
-    args.backbone = "resnet101"
+    args.model = "PIGNet_GSPonly" #PIGNet PIGNet_GSPonly  Mask2Former ASPP
+    args.backbone = "resnet50"
     args.workers = 4
     args.epochs = 50
     args.batch_size = 16
@@ -165,11 +164,13 @@ def main():
     args.n_skip_l = 2
 
 
-    args.process_type = 'zoom'  # None zoom, overlap, repeat
+    args.process_type = 'repeat'  # None zoom, overlap, repeat
     zoom_factor = 0.1 # zoom in, out value 양수면 줌 음수면 줌아웃
-    overlap_percentage = 0.7 #겹치는 비율 0~1 사이 값으로 0.8 이상이면 shape 이 안맞음
-    pattern_repeat_count = 2 # 반복 횟수 2이면 2*2
-
+    overlap_percentage = 0.2 #겹치는 비율 0~1 사이 값으로 0.8 이상이면 shape 이 안맞음
+    pattern_repeat_count = 3 # 반복 횟수 2이면 2*2
+    if args.train:
+        wandb.init(project='pignet_segmentation', name=args.model+'_'+args.backbone+ '_embed' + str(args.embedding_size) +'_nlayer' + str(args.n_layer) + '_'+args.exp+'_'+str(args.dataset),
+                    config=args.__dict__)
 
     # if is cuda available device
     if torch.cuda.is_available():
@@ -216,6 +217,16 @@ def main():
     if args.backbone in ["resnet50","resnet101","resnet152"]:
         if args.model == "PIGNet_GSPonly":
             model = getattr(PIGNet_GSPonly, args.backbone)(
+                pretrained=(not args.scratch),
+                num_classes=len(dataset.CLASSES),
+                num_groups=args.groups,
+                weight_std=args.weight_std,
+                beta=args.beta,
+                embedding_size = args.embedding_size,
+                n_layer = args.n_layer,
+                n_skip_l = args.n_skip_l)
+        elif args.model == "PIGNet":
+            model = getattr(PIGNet, args.backbone)(
                 pretrained=(not args.scratch),
                 num_classes=len(dataset.CLASSES),
                 num_groups=args.groups,
@@ -271,7 +282,7 @@ def main():
                 list(model.module.layer2.parameters()) +
                 list(model.module.layer3.parameters()) +
                 list(model.module.layer4.parameters()))
-        if args.model == "PIGNet_GSPonly":
+        if args.model == "PIGNet_GSPonly" or args.model=="PIGNet":
             last_params = list(model.module.pyramid_gnn.parameters())
 
         optimizer = optim.SGD([
@@ -336,10 +347,11 @@ def main():
                 losses.update(loss.item(), args.batch_size)
                 loss_sum += loss.item()
                 loss.backward()
-                print('batch_loss: {:.5f}'.format(loss))
+                #print('batch_loss: {:.5f}'.format(loss))
 
                 log['train/batch/loss'] = loss.to('cpu')
-                # log['train/temp'] = get_cpu_temperature()
+
+                #log['train/temp'] = get_cpu_temperature()
 
                 cnt += 1
                 train_step += 1
@@ -352,9 +364,8 @@ def main():
 
             loss_avg = loss_sum / len(dataset_loader)
             log['train/epoch/loss'] = loss_avg
-            # wandb.log(log) but with timestep train_step
 
-            # wandb.log(log)
+            wandb.log(log)
 
             loss_list.append(loss_avg)
             print('epoch: {0}\t'
@@ -421,6 +432,8 @@ def main():
                 log['test/epoch/iou'] = miou.item()
             # time.sleep(60)
             model.train()
+
+        wandb.finish()
     else:
         print("Evaluating !!! ")
         torch.cuda.set_device(args.gpu)
@@ -446,8 +459,10 @@ def main():
 
 
         for i in tqdm(range(len(dataset))):
-            inputs, target = dataset[i]
 
+            inputs, target = dataset[i]
+            if inputs==None:
+                continue
 
             inputs = Variable(inputs.to(args.device))
             outputs = model(inputs.unsqueeze(0))

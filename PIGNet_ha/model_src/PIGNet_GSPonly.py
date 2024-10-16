@@ -96,8 +96,8 @@ class blockSAGEsq(nn.Module):
         super(blockSAGEsq, self).__init__()
         self.hidden = int(hidden)
         self.inner = int(inner)
-        self.sage1 = SAGEConv(self.hidden, self.hidden, aggregator='pool')
-        self.sage2 = SAGEConv(self.hidden, self.hidden, aggregator='pool')
+        self.sage1 = SAGEConv(self.hidden, self.hidden, 'max')
+        self.sage2 = SAGEConv(self.hidden, self.hidden, 'max')
 
         # self.sage1 = SAGEConv(self.hidden, self.hidden, aggregator='gcn')
         # self.sage2 = SAGEConv(self.hidden, self.hidden, aggregator='gcn')

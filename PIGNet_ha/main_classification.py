@@ -12,7 +12,8 @@ import pandas as pd
 import os
 from torchvision import transforms
 import math
-from model_src import Classification_resnet, PIGNet_GSPonly_classification, swin
+from model_src import Classification_resnet, PIGNet_GSPonly_classification, swin,PIGNet_classification
+#from model_src.cvnets.models.classification import mobilevit_v3
 import torch.nn.functional as F
 from utils import AverageMeter
 from torchvision.datasets import ImageFolder
@@ -23,6 +24,7 @@ from torch.nn.functional import cosine_similarity
 import matplotlib.pyplot as plt
 import wandb
 from vit_pytorch import ViT
+from efficientnet_pytorch import EfficientNet
 def make_batch_fn(samples, batch_size, feature_shape):
     return make_batch(samples, batch_size, feature_shape)
 
@@ -273,13 +275,13 @@ def make_batch(samples, batch_size, feature_shape):
 def main():
     # make fake args
     args = argparse.Namespace()
-    args.dataset = "CIFAR-10" #CIFAR-10 CIFAR-100  imagenet
-    args.model = "vit" #Resnet  PIGNet_GSPonly_classification  vit  swin
-    args.backbone = "resnet50"
+    args.dataset = "imagenet" #CIFAR-10 CIFAR-100  imagenet
+    args.model = "Resnet" #PIGNet_classification Resnet  PIGNet_GSPonly_classification  vit  swin
+    args.backbone = "resnet101"
     args.workers = 4
     args.epochs = 50
     args.batch_size = 8
-    args.train = True
+    args.train = False
     args.crop_size = 513 #513
     args.base_lr = 0.007
     args.last_mult = 1.0 
@@ -294,7 +296,7 @@ def main():
     args.embedding_size = 256
     args.n_layer = 6
     args.n_skip_l = 2 #2
-    args.process_type = "zoom"  #zoom overlap repeat None
+    args.process_type = 'zoom'  #zoom overlap repeat None
     #pattern_repeat_count = 2
     zoom_factor =2
 
@@ -464,6 +466,17 @@ def main():
                 n_layer = args.n_layer,
                 n_skip_l = args.n_skip_l)
             print("model PIGNet_GSPonly_classification")
+        elif args.model == "PIGNet_classification":
+            model = getattr(PIGNet_classification, args.backbone)(
+                pretrained=(not args.scratch),
+                num_classes=len(dataset.CLASSES),
+                num_groups=args.groups,
+                weight_std=args.weight_std,
+                beta=args.beta,
+                embedding_size = args.embedding_size,
+                n_layer = args.n_layer,
+                n_skip_l = args.n_skip_l)
+            print("model PIGNet_classification")
         elif args.model == "Resnet":
             print("Classification_resnet model load")
             model = getattr(Classification_resnet, args.backbone)(
@@ -490,6 +503,8 @@ def main():
             )
         elif args.model == 'swin':
             model = torchvision.models.swin_t(weights=torchvision.models.Swin_T_Weights.DEFAULT)
+        elif args.model == 'mobile':
+            model = mobilevit_v3()
 
     else:
 
@@ -531,7 +546,7 @@ def main():
                         list(model.module.layer3.parameters()) +
                         list(model.module.layer4.parameters()))
 
-            if args.model == "PIGNet_GSPonly_classification":
+            if args.model == "PIGNet_GSPonly_classification" or args.model=="PIGNet_classification":
                 last_params = list(model.module.pyramid_gnn.parameters())
                 optimizer = optim.SGD([
                     {'params': filter(lambda p: p.requires_grad, backbone_params)},
@@ -732,7 +747,6 @@ def main():
                 log['test/epoch/accuracy'] = accuracy
 
             wandb.log(log)
-            # time.sleep(60)
             model.train()
 
         # train_log.to_csv("training_log.csv", index=False)
