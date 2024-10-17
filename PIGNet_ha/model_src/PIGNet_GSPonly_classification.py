@@ -362,8 +362,6 @@ class ResNet(nn.Module):
     def __init__(self, block, layers, num_classes, num_groups=None, weight_std=False, beta=False, **kwargs):
         if 'embedding_size' in kwargs:
             self.embedding_size = kwargs['embedding_size']
-        else:
-            self.embedding_size = 8 # for pacal  21
         if 'n_layer' in kwargs:
             self.n_layer = kwargs['n_layer']
         else:

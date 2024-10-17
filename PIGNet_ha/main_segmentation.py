@@ -16,7 +16,7 @@ from torchvision import transforms
 from torch.utils.data import RandomSampler
 import pandas as pd
 from model_src import PIGNet_GSPonly, ASPP, PIGNet
-#from model_src.Mask2Former import Mask2Former
+from model_src.Mask2Former import Mask2Former
 from pascal import VOCSegmentation
 from utils import AverageMeter, inter_and_union
 from functools import partial
@@ -142,8 +142,8 @@ def main():
     # make fake args
     args = argparse.Namespace()
     args.dataset = "pascal"
-    args.model = "PIGNet_GSPonly" #PIGNet PIGNet_GSPonly  Mask2Former ASPP
-    args.backbone = "resnet50"
+    args.model = "Mask2Former" #PIGNet PIGNet_GSPonly  Mask2Former ASPP
+    args.backbone = "resnet101"
     args.workers = 4
     args.epochs = 50
     args.batch_size = 16
@@ -163,11 +163,12 @@ def main():
     args.n_layer = 8
     args.n_skip_l = 2
 
-
-    args.process_type = 'repeat'  # None zoom, overlap, repeat
+    args.process_type = "repeat"  # None zoom, overlap, repeat
     zoom_factor = 0.1 # zoom in, out value 양수면 줌 음수면 줌아웃
     overlap_percentage = 0.2 #겹치는 비율 0~1 사이 값으로 0.8 이상이면 shape 이 안맞음
     pattern_repeat_count = 3 # 반복 횟수 2이면 2*2
+
+
     if args.train:
         wandb.init(project='pignet_segmentation', name=args.model+'_'+args.backbone+ '_embed' + str(args.embedding_size) +'_nlayer' + str(args.n_layer) + '_'+args.exp+'_'+str(args.dataset),
                     config=args.__dict__)

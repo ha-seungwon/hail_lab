@@ -34,53 +34,6 @@ def visualize_compared_features(compared_features):
     plt.title('Compared Features')
     plt.show()
 
-def compute_similarity(feature_map,labels):
-    # feature_map의 shape을 가져옴
-    batch_size, num_channels, height, width = feature_map.size()
-
-
-    similarities = [0 for _ in range(4)]
-    for channel_idx in range(num_channels):
-        # 현재 채널(feature)의 특징 벡터
-        channel_features = feature_map[:, channel_idx, :]
-
-        # 채널의 중심(center) 지점
-        center_idx = (int(height/2),int(width/2))
-        center = channel_features[:, center_idx[0], center_idx[1]]  # 모든 데이터 포인트에 대해 중심 값을 가져옴
-        distance_count=0
-        # center에서 일정 거리만큼 떨어진 지점들의 코사인 유사도 계산
-        distance = 2
-        for z in range(4):  # distance가 1부터 4까지 변경 가능
-            compared_indices = [(center_idx[0] + dx, center_idx[1] + dy) for dx in range(-distance, distance + 1) for dy
-                                in range(-distance, distance + 1)]
-            # 중복 제거
-            compared_indices = list(set(compared_indices))
-
-            # 이전 거리에 해당하는 인덱스 제외
-            if distance > 1:
-                previous_indices = [(center_idx[0] + dx, center_idx[1] + dy) for dx in range(-(distance - 1), distance)
-                                    for dy
-                                    in range(-(distance - 1), distance)]
-                # 유효한 인덱스만 남기고 다른 것들 제거
-                previous_indices = [(x, y) for (x, y) in previous_indices if 0 <= x < height and 0 <= y < width]
-                compared_indices=[(x, y) for (x, y) in compared_indices if 0 <= x < height and 0 <= y < width]
-                compared_indices = list(set(compared_indices) - set(previous_indices))
-
-
-
-            # 현재 distance에 해당하는 지점들의 특징 벡터 가져오기
-            compared = channel_features[:, [idx[0] for idx in compared_indices], [idx[1] for idx in compared_indices]]
-            grap_compared = compared.cpu().squeeze()
-
-
-            similarity = cosine_similarity(center, compared,dim=1)
-            similarities[distance_count] += abs(similarity)
-            distance_count+=1
-            distance *= 2
-
-    similarities_ = [similarity / num_channels for similarity in similarities]
-    # 각 채널의 픽셀 유사도의 평균을 반환
-    return similarities_
 
 def get_cpu_temperature():
     sensors_output = subprocess.check_output("sensors").decode()
@@ -296,9 +249,9 @@ def main():
     args.embedding_size = 256
     args.n_layer = 6
     args.n_skip_l = 2 #2
-    args.process_type = 'zoom'  #zoom overlap repeat None
+    args.process_type = None  #zoom overlap repeat None
     #pattern_repeat_count = 2
-    zoom_factor =2
+    zoom_factor = 2.0
 
     # if is cuda available device
     if torch.cuda.is_available():
@@ -800,28 +753,45 @@ def main():
                 correct += predicted.eq(labels).sum().item()
 
             # 텐서 크기에서 중심 좌표를 자동으로 설정 (H/2, W/2)
-            # H, W = layer_outputs.shape[2], layer_outputs.shape[3]
-            # center_x, center_y = H // 2, W // 2
-            #
+            H, W = layer_outputs.shape[2], layer_outputs.shape[3]
+            center_x, center_y = H // 2, W // 2
+            distances = [1, 2, 3, 4]
             # 중심점 feature 벡터 (512차원)
-            # center_vector = layer_outputs[0, :, center_x, center_y]
-            #
-            # 각 거리에 대해 코사인 유사도 계산
-            # for distance in distances:
-            #     coords = get_coords_by_distance(center_x, center_y, distance, H, W)  # 거리별 좌표 구하기
-            #     cos_sims = calculate_cosine_similarity(coords, center_vector, layer_outputs)  # 유사도 계산
-            #     mean_cos_sim = sum(cos_sims) / len(cos_sims)  # 평균 코사인 유사도 계산
-            #     index = distances.index(distance)
-            #     distances_sum[index] += mean_cos_sim
+            center_vector = layer_outputs[0, :, center_x, center_y]
+            similarities = {distance: [] for distance in distances}
 
+            for distance in distances:
+                x_indices = [max(center_x - distance, 0), min(center_x + distance, H - 1)]
+                y_indices = [max(center_y - distance, 0), min(center_y + distance, W - 1)]
 
-            #for idx, model in enumerate(pixel_similarity_value):
-            #    for idx_, data_ in enumerate(model):
-            #        pixel_similarity_value[idx][idx_]=data_/count
+                for x in range(x_indices[0], x_indices[1] + 1):
+                    for y in range(y_indices[0], y_indices[1] + 1):
+                        if (x, y) != (center_x, center_y):
+                            neighbor_vector = layer_outputs[0, :, x, y]
+                            cosine_similarity = F.cosine_similarity(center_vector.unsqueeze(0),
+                                                                    neighbor_vector.unsqueeze(0))
+                            similarities[distance].append(cosine_similarity.item())
+
+            # 결과 출력
+            for distance, values in similarities.items():
+                for idx, sim in enumerate(values):
+                    print(f"Distance: {distance}, Cosine Similarity: {sim:.4f}")
+            # 각 거리별 평균 유사도 계산
+            average_similarities = {distance: sum(values) / len(values) if values else 0 for distance, values in
+                                    similarities.items()}
+
+            # 선 그래프 그리기
+            plt.figure(figsize=(10, 6))
+            plt.plot(average_similarities.keys(), average_similarities.values(), marker='o')
+            plt.title('Average Cosine Similarity by Distance')
+            plt.xlabel('Distance')
+            plt.ylabel('Average Cosine Similarity')
+            plt.xticks(distances)
+            plt.grid(True)
+            plt.show()
             accuracy = 100 * correct / total
             print('Accuracy: {:.2f}%'.format(accuracy))
-            for i, distance in enumerate(distances):
-                print(f"Sum of Cosine similarity for distance {distance}: {distances_sum[i]/len(valid_dataset)}")
+
 
 
 

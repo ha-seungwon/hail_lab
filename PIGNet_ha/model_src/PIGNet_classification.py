@@ -203,7 +203,7 @@ class GSP(nn.Module):
 
         self.edge_index = None
         self.graph_data = None
-        self.grid_size = 8 #feature map size  33 for pascal   8 for cifar-100  14 for imagenet
+        self.grid_size = 14 #feature map size  33 for pascal   8 for cifar-100  14 for imagenet(embedding 256 기준)
 
         self.gelu = nn.GELU()
 
@@ -309,6 +309,10 @@ class GSP(nn.Module):
                 x_s_f.append(self.graph2feature(x, num_nodes=(self.grid_size ** 2),
                                                 feature_shape=(self.embedding_size, self.grid_size, self.grid_size)))
 
+
+
+        #for i in x_s_f:
+        #    print(i.size())
         output = torch.cat(x_s_f, dim=1)
 
         # Decoder
@@ -366,8 +370,6 @@ class ResNet(nn.Module):
     def __init__(self, block, layers, num_classes, num_groups=None, weight_std=False, beta=False, **kwargs):
         if 'embedding_size' in kwargs:
             self.embedding_size = kwargs['embedding_size']
-        else:
-            self.embedding_size = 8  # From WJM's code
         if 'n_layer' in kwargs:
             self.n_layer = kwargs['n_layer']
         else:
@@ -396,8 +398,8 @@ class ResNet(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         self.layer1 = self._make_layer(block, 64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=1) #image net 1  cifar 2
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=1) #image net 1  cifar 2
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2) #image net 2  cifar 1
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2) #image net 2  cifar 1
         self.layer4 = self._make_layer(block, 512, layers[3], stride=1, dilation=2)
         self.pyramid_gnn = GSP(num_classes, 256 * block.expansion, self.embedding_size, self.n_layer,
                                n_skip_l=self.n_skip_l)
@@ -445,11 +447,12 @@ class ResNet(nn.Module):
         #x = self.layer4(x)  # block4
 
         x = self.pyramid_gnn(x)
+        return_gsp_output = x
         x = self.global_avg_pool(x)
 
         x = x.view(x.size(0), -1)
         x = self.FC(x)
-        return x,0
+        return x,return_gsp_output
 
 
 def resnet50(pretrained=False, num_groups=None, weight_std=False, **kwargs):

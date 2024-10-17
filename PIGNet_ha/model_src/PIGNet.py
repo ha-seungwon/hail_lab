@@ -442,10 +442,10 @@ class ResNet(nn.Module):
         x = self.layer4(x)  # block4
 
         x = self.pyramid_gnn(x)
-
+        return_gsp_output = x
         x = nn.Upsample(size, mode='bilinear', align_corners=True)(x)
 
-        return x
+        return x , return_gsp_output
 
 
 def resnet50(pretrained=False, num_groups=None, weight_std=False, **kwargs):
